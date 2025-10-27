@@ -5,25 +5,85 @@ interface DrawingCanvasProps {
   shake: boolean;
   aiDrawingToLoad: string | null;
   onAiDrawingComplete: () => void;
+  initialDrawingUrl: string | null;
+  onHistoryUpdate: (canUndo: boolean, canRedo: boolean) => void;
 }
 
 export interface DrawingCanvasRef {
     getImageDataUrl: () => string;
     clearCanvas: () => void;
+    undo: () => void;
+    redo: () => void;
 }
 
 const DRAW_COLOR = '#404040';
 const BG_COLOR = '#cbd5e1'; // This is the Etch A Sketch screen color, it should not change with the theme.
 const BRUSH_SIZE = 3;
 
-const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ shake, aiDrawingToLoad, onAiDrawingComplete }, ref) => {
+const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ shake, aiDrawingToLoad, onAiDrawingComplete, initialDrawingUrl, onHistoryUpdate }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawingRef = useRef(false);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
+  // History state
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  const isInitializedRef = useRef(false);
+
   const getCanvasContext = useCallback(() => {
     return canvasRef.current?.getContext('2d', { willReadFrequently: true });
   }, []);
+
+  const saveState = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+        historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
+    }
+    
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+    if (historyRef.current[historyIndexRef.current] === dataUrl) {
+      return;
+    }
+
+    historyRef.current.push(dataUrl);
+    historyIndexRef.current = historyRef.current.length - 1;
+
+    onHistoryUpdate(historyIndexRef.current > 0, false);
+  }, [onHistoryUpdate]);
+
+  const redrawCanvasFromHistory = useCallback((index: number) => {
+    const dataUrl = historyRef.current[index];
+    const canvas = canvasRef.current;
+    const ctx = getCanvasContext();
+    if (!canvas || !ctx || !dataUrl) return;
+
+    const image = new Image();
+    image.src = dataUrl;
+    image.onload = () => {
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
+  }, [getCanvasContext]);
+
+  const undo = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+        historyIndexRef.current--;
+        redrawCanvasFromHistory(historyIndexRef.current);
+        onHistoryUpdate(historyIndexRef.current > 0, true);
+    }
+  }, [redrawCanvasFromHistory, onHistoryUpdate]);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+        historyIndexRef.current++;
+        redrawCanvasFromHistory(historyIndexRef.current);
+        onHistoryUpdate(true, historyIndexRef.current < historyRef.current.length - 1);
+    }
+  }, [redrawCanvasFromHistory, onHistoryUpdate]);
 
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -31,7 +91,8 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
     if (!canvas || !ctx) return;
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }, [getCanvasContext]);
+    saveState();
+  }, [getCanvasContext, saveState]);
 
   useImperativeHandle(ref, () => ({
     getImageDataUrl: () => {
@@ -41,12 +102,12 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         }
         return '';
     },
-    clearCanvas: () => {
-        clearCanvas();
-    }
+    clearCanvas,
+    undo,
+    redo,
   }));
 
-  // Effect to make the canvas responsive, preserving content
+  // Effect to make the canvas responsive and set initial state
   useEffect(() => {
     const canvas = canvasRef.current;
     const parent = canvas?.parentElement;
@@ -69,11 +130,28 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
 
         canvas.width = width;
         canvas.height = height;
-
-        clearCanvas();
-
+        const ctx = getCanvasContext();
+        if (!ctx) return;
+        
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, width, height);
+        
         if (contentToPreserve) {
-            getCanvasContext()?.drawImage(contentToPreserve, 0, 0, width, height);
+            ctx.drawImage(contentToPreserve, 0, 0, width, height);
+        }
+
+        if (!isInitializedRef.current) {
+            isInitializedRef.current = true;
+            if (initialDrawingUrl) {
+                const image = new Image();
+                image.src = initialDrawingUrl;
+                image.onload = () => {
+                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    saveState();
+                };
+            } else {
+                saveState();
+            }
         }
       }
     });
@@ -85,7 +163,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         resizeObserver.unobserve(parent);
       }
     };
-  }, [clearCanvas, getCanvasContext]);
+  }, [getCanvasContext, initialDrawingUrl, saveState]);
 
   // Effect to load and process AI drawing
   useEffect(() => {
@@ -99,9 +177,6 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         const mainCtx = getCanvasContext();
         if (!mainCanvas || !mainCtx) return;
 
-        // DO NOT CLEAR THE CANVAS. We are compositing the new drawing on top.
-        // clearCanvas();
-
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = image.width;
         tempCanvas.height = image.height;
@@ -113,31 +188,25 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         const data = imageData.data;
         const drawColor = [64, 64, 64]; // #404040
 
-        // Process pixels: make everything that isn't a dark line transparent,
-        // and color the dark lines correctly. This ensures style consistency.
         for (let i = 0; i < data.length; i += 4) {
           const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
           const alpha = data[i + 3];
 
-          // A pixel is part of the line if it's dark and not mostly transparent.
           const isLinePixel = alpha > 100 && brightness < 128;
 
           if (isLinePixel) {
-            // It's a line, so color it correctly and make it fully opaque.
             data[i] = drawColor[0];
             data[i + 1] = drawColor[1];
             data[i + 2] = drawColor[2];
             data[i + 3] = 255;
           } else {
-            // It's background, so make it fully transparent.
             data[i + 3] = 0;
           }
         }
         tempCtx.putImageData(imageData, 0, 0);
-
-        // Draw the processed addition onto the main canvas.
         mainCtx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
-
+        
+        saveState();
         onAiDrawingComplete();
       };
 
@@ -146,7 +215,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         onAiDrawingComplete();
       };
     }
-  }, [aiDrawingToLoad, getCanvasContext, onAiDrawingComplete]);
+  }, [aiDrawingToLoad, getCanvasContext, onAiDrawingComplete, saveState]);
 
   // Core drawing logic
   useEffect(() => {
@@ -192,8 +261,11 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
     };
 
     const handleEnd = () => {
-      isDrawingRef.current = false;
-      lastPosRef.current = null;
+      if (isDrawingRef.current) {
+          isDrawingRef.current = false;
+          lastPosRef.current = null;
+          saveState();
+      }
     };
 
     canvas.addEventListener('mousedown', handleStart);
@@ -213,7 +285,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       canvas.removeEventListener('touchend', handleEnd);
       canvas.removeEventListener('mouseleave', handleEnd);
     };
-  }, [getCanvasContext]);
+  }, [getCanvasContext, saveState]);
   
   // Apply shake animation
   useEffect(() => {

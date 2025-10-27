@@ -20,33 +20,49 @@ const SpinnerIcon: React.FC = () => (
     </svg>
 );
 
+const KeyIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" viewBox="0 0 20 20" fill="currentColor">
+      <path fillRule="evenodd" d="M10 2a2 2 0 00-2 2v2H7a2 2 0 00-2 2v8a2 2 0 002 2h6a2 2 0 002-2v-8a2 2 0 00-2-2h-1V4a2 2 0 00-2-2zm-1 4V4a1 1 0 112 0v2H9z" clipRule="evenodd" />
+    </svg>
+);
+
 
 interface ControlButtonProps {
   status: Status;
+  isKeySelected: boolean;
   onStart: () => void;
   onStop: () => void;
+  onSelectKey: () => void;
 }
 
-const ControlButton: React.FC<ControlButtonProps> = ({ status, onStart, onStop }) => {
+const ControlButton: React.FC<ControlButtonProps> = ({ status, isKeySelected, onStart, onStop, onSelectKey }) => {
   const isDisabled = status === 'connecting';
   const isActive = status === 'active';
 
   const getButtonContent = () => {
+    if (!isKeySelected && status !== 'connecting' && status !== 'active') {
+        return { icon: <KeyIcon />, text: 'Select Key', action: onSelectKey, label: "Select API Key" };
+    }
+
     switch (status) {
       case 'connecting':
-        return { icon: <SpinnerIcon />, text: 'Connecting' };
+        return { icon: <SpinnerIcon />, text: 'Connecting', action: () => {}, label: "Connecting to session" };
       case 'active':
-        return { icon: <StopIcon />, text: 'Stop' };
+        return { icon: <StopIcon />, text: 'Stop', action: onStop, label: "Stop conversation" };
       case 'error':
-        return { icon: <MicIcon />, text: 'Retry' };
+        // If error was due to key, show key selection button again.
+        if (!isKeySelected) {
+            return { icon: <KeyIcon />, text: 'Select Key', action: onSelectKey, label: "Select API Key" };
+        }
+        return { icon: <MicIcon />, text: 'Retry', action: onStart, label: "Retry conversation" };
       case 'idle':
       default:
-        return { icon: <MicIcon />, text: 'Start' };
+        return { icon: <MicIcon />, text: 'Start', action: onStart, label: "Start conversation" };
     }
   };
 
-  const { icon, text } = getButtonContent();
-
+  const { icon, action, label } = getButtonContent();
+  
   const baseClasses = 'w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-300 shadow-inner bg-white';
   const colorClasses = isActive 
     ? 'text-gray-500' 
@@ -55,10 +71,10 @@ const ControlButton: React.FC<ControlButtonProps> = ({ status, onStart, onStop }
   
   return (
     <button
-      onClick={isActive ? onStop : onStart}
+      onClick={action}
       disabled={isDisabled}
       className={`${baseClasses} ${colorClasses} ${disabledClasses}`}
-      aria-label={`${text} Conversation`}
+      aria-label={label}
     >
       {icon}
     </button>

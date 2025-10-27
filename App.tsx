@@ -15,7 +15,7 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const AUDIO_BUFFER_SIZE = 4096;
 const RADIO_STREAM_URL = 'https://listen-funkids.sharp-stream.com/funkids.mp3';
-const DRAWING_LOOP_URL = 'https://dw.zobj.net/download/v1/bsgpdBAOCGUfA3o0W11gFHK22SKeDM9FG5IPMu6RtnDwZwctUEGF37KOz8_McgA77Cv-_ynmT6GqQPtXgOfaKtfvyMqqSJ6oFJZ2-nWhJnF3ysh2z_DmWvcYpwp8/?a=&c=72&f=booloop.mp3&special=1761585023-Zof%2BCgnaeyIUJ8yuG%2FNtlQw%2BWeDGDVM8q7zk8H8%2Fods%3D';
+const DRAWING_LOOP_URL = 'https://cdn.buildspace.host/bloopbloop/audio/pencil.mp3';
 
 
 // --- AI Tool Declarations ---
@@ -43,6 +43,24 @@ const clearCanvasFunctionDeclaration: FunctionDeclaration = {
     },
 };
 
+const UndoIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+      <path fillRule="evenodd" d="M7.707 3.293a1 1 0 010 1.414L5.414 7H11a7 7 0 017 7v2a1 1 0 11-2 0v-2a5 5 0 00-5-5H5.414l2.293 2.293a1 1 0 11-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+    </svg>
+);
+const RedoIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor" style={{ transform: 'scaleX(-1)' }}>
+        <path fillRule="evenodd" d="M7.707 3.293a1 1 0 010 1.414L5.414 7H11a7 7 0 017 7v2a1 1 0 11-2 0v-2a5 5 0 00-5-5H5.414l2.293 2.293a1 1 0 11-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+    </svg>
+);
+
+const SaveIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M17 3H5a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2zM6 14v-2h8v2H6zm8-4H6V6h8v4z" />
+    </svg>
+);
+
+
 const App: React.FC = () => {
     const [status, setStatus] = useState<Status>('idle');
     const [aiMessage, setAiMessage] = useState('Press the left knob to begin!');
@@ -50,6 +68,10 @@ const App: React.FC = () => {
     const [aiDrawingToLoad, setAiDrawingToLoad] = useState<string | null>(null);
     const [isShaking, setIsShaking] = useState(false);
     const [isAiDrawing, setIsAiDrawing] = useState(false);
+    const [initialDrawingUrl, setInitialDrawingUrl] = useState<string | null>(null);
+    const [canUndo, setCanUndo] = useState(false);
+    const [canRedo, setCanRedo] = useState(false);
+    const [isKeySelected, setIsKeySelected] = useState(false);
 
     // Refs
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -72,12 +94,54 @@ const App: React.FC = () => {
     const currentOutputRef = useRef('');
     const drawingAudioRef = useRef<HTMLAudioElement | null>(null);
     const isAiDrawingRef = useRef(false);
+    const pendingDrawStartRef = useRef(false);
 
     // --- Core App Logic (Wake Lock, Audio Init, etc.) ---
 
     useEffect(() => {
+        const checkApiKey = async () => {
+            // @ts-ignore
+            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
+                setIsKeySelected(true);
+            }
+        };
+        checkApiKey();
+    }, []);
+
+    useEffect(() => {
+        const savedDrawing = localStorage.getItem('bloop-bloop-saved-drawing');
+        if (savedDrawing) {
+            setInitialDrawingUrl(savedDrawing);
+        }
+    }, []);
+
+    useEffect(() => {
         isAiDrawingRef.current = isAiDrawing;
     }, [isAiDrawing]);
+    
+    // Effect to manage drawing audio loop
+    useEffect(() => {
+        if (isAiDrawing) {
+            // Stop any currently playing TTS
+            audioPlaybackSources.current.forEach(source => source.stop());
+            audioPlaybackSources.current.clear();
+            nextAudioStartTimeRef.current = 0;
+
+            // Play drawing loop
+            const drawingAudio = drawingAudioRef.current;
+            if (drawingAudio) {
+                drawingAudio.currentTime = 0; // Ensure it starts from the beginning
+                drawingAudio.play().catch(e => console.error("Drawing audio play failed:", e));
+            }
+        } else {
+            // Stop drawing loop when not drawing
+            const drawingAudio = drawingAudioRef.current;
+            if (drawingAudio && !drawingAudio.paused) {
+                drawingAudio.pause();
+            }
+        }
+    }, [isAiDrawing]);
+
 
     const requestWakeLock = useCallback(async () => {
       if ('wakeLock' in navigator && document.visibilityState === 'visible') {
@@ -154,6 +218,22 @@ const App: React.FC = () => {
         setAiMessage('Session ended. Press the left knob to play again!');
     }, [cleanup]);
 
+    const handleSelectKey = async () => {
+        // @ts-ignore
+        if (window.aistudio) {
+            try {
+                // @ts-ignore
+                await window.aistudio.openSelectKey();
+                setIsKeySelected(true); // Optimistically set to true
+            } catch (e) {
+                console.error("Failed to open key selection:", e);
+                setAiMessage("Could not open API key selection.");
+            }
+        } else {
+            setAiMessage("API key selection is not available here.");
+        }
+    };
+
     const handleStart = async () => {
         if (status === 'active' || status === 'connecting') return;
         
@@ -169,6 +249,7 @@ const App: React.FC = () => {
         setAiMessage('Connecting...');
         currentOutputRef.current = '';
         hasSentCanvasForThisTurnRef.current = false;
+        pendingDrawStartRef.current = false;
 
         try {
             aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY! });
@@ -197,6 +278,9 @@ const App: React.FC = () => {
                         scriptProcessorRef.current = inputAudioContextRef.current!.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
                         
                         scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
+                            if (isAiDrawingRef.current) {
+                                return; // Don't process microphone input while AI is drawing
+                            }
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
                             sessionPromiseRef.current?.then((session) => {
@@ -219,8 +303,15 @@ const App: React.FC = () => {
                     onmessage: (message: LiveServerMessage) => handleServerMessage(message),
                     onerror: (e: ErrorEvent) => {
                         console.error('Session error:', e);
-                        setStatus('error');
-                        setAiMessage('An error occurred. Please try again.');
+                        // Reset key selection state if the error is likely due to an invalid key
+                        if (e.message.includes('Network error') || e.message.includes('not found')) {
+                            setStatus('error');
+                            setAiMessage('Connection failed. Please select a valid API key and try again.');
+                            setIsKeySelected(false);
+                        } else {
+                            setStatus('error');
+                            setAiMessage('An error occurred. Please try again.');
+                        }
                         cleanup();
                     },
                     onclose: (e: CloseEvent) => {
@@ -233,7 +324,7 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: "Your name is Bloop Bloop. You are a fun AI assistant from the 'Fun Kids' Edition, living inside a classic Etch A Sketch toy. The user interacts with you by voice and by drawing. At the start of their turn, you'll see the current drawing. Your first task is to look at the drawing and comment on what you see, especially if it's changed. For example, say 'Ooh, a house! What should we add next?' or 'Wow, you added a chimney!'. Always be playful and engaging, and suggest fun things to draw or add. You can add to the user's drawing by calling 'drawSomething' which will intelligently edit the image, and you can clear the screen by calling 'clearCanvas'. The drawing style is always a single dark line on a gray background. Keep your text responses short and fun, suitable for the toy's screen.",
+                    systemInstruction: "You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch. Your conversation must follow this exact flow:\n1. **Look and Comment:** Start your turn by looking at the user's drawing. If they've drawn something new, admire it first (e.g., 'Wow, a new car! Cool!'). Then, briefly acknowledge their voice command (e.g., 'Okay, adding a sun!'). Say this all in one go.\n2. **Draw Immediately:** Right after your comment, you MUST call the `drawSomething` tool. Do not say anything else. The system will then show you drawing.\n3. **Announce and Ask:** After the drawing is finished, announce it with a fun comment (e.g., 'All done! The sun is shining!'). Then, ask what to do next (e.g., 'What should we draw now?').\n4. **Wait Silently:** After you speak, you must wait silently for the user's turn.\n\nKeep all your comments very short, cheerful, and encouraging. The drawing is always a single dark line on a gray background.",
                     tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration, clearCanvasFunctionDeclaration] }],
                 },
             });
@@ -251,10 +342,21 @@ const App: React.FC = () => {
     const handleServerMessage = async (message: LiveServerMessage) => {
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
-                let toolResponseResult = "done";
                 if (fc.name === 'drawSomething') {
-                    setAiMessage('Drawing...');
-                    setIsAiDrawing(true);
+                    setAiMessage(`Drawing: ${fc.args.description}...`);
+                    
+                    pendingDrawStartRef.current = true;
+                    // If the AI has already finished speaking, start the drawing sequence.
+                    if (audioPlaybackSources.current.size === 0) {
+                        setTimeout(() => {
+                            if (audioPlaybackSources.current.size === 0 && pendingDrawStartRef.current) {
+                                setIsAiDrawing(true);
+                                pendingDrawStartRef.current = false;
+                            }
+                        }, 100);
+                    }
+                    
+                    let toolResponseResult = "done";
                     try {
                         if (!turnCanvasSnapshotRef.current) {
                           throw new Error("Missing canvas snapshot for this turn.");
@@ -268,7 +370,16 @@ const App: React.FC = () => {
                         };
 
                         const textPart = {
-                           text: `You are an Etch A Sketch drawing assistant. The user's current drawing is provided for context. Their request is to add the following to it: '${fc.args.description}'. Generate an image containing ONLY the new drawing element, in a style that matches the existing drawing (a single dark line). The background of the image you generate MUST be transparent.`
+                           text: `You are an expert Etch A Sketch artist with a keen sense of composition and spatial awareness. The user's current drawing is provided as context. Your task is to artistically add a new element based on their request: '${fc.args.description}'.
+
+**Your output MUST be an image with the exact same dimensions as the input image.**
+
+**Instructions:**
+1.  **Analyze the Composition:** Look at the existing drawing. Identify objects, characters, and the overall balance. Find the most aesthetically pleasing and logical empty space for the new element.
+2.  **Determine Placement and Scale:** Based on your analysis, decide the perfect location and size for the new element. It should fit naturally within the scene. For example, a sun should be small and in the corner of the sky, while a car should be on the ground and scaled appropriately to other objects. **Critically, do not draw over existing lines.**
+3.  **Generate the Addition:** In the new image you create, draw **ONLY** the new element at the correct scale. The rest of the image must be transparent.
+4.  **Position Correctly:** The new element must be drawn in its correct location within the full-size transparent canvas. When this new image is placed over the original, it should look perfect.
+5.  **Match the Style:** The new drawing must be a single, dark, continuous line, matching the classic Etch A Sketch style.`
                         };
                         
                         const response = await aiRef.current!.models.generateContent({
@@ -280,29 +391,40 @@ const App: React.FC = () => {
                         const part = response.candidates?.[0]?.content?.parts?.[0];
                         if (part?.inlineData) {
                             setAiDrawingToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                        } else throw new Error("No image data received.");
+                        } else {
+                            throw new Error("No image data received.");
+                        }
                     } catch (error) {
                         console.error("Image generation failed:", error);
                         setAiMessage("Sorry, I couldn't edit the drawing.");
                         setIsAiDrawing(false);
                         toolResponseResult = "error";
                     }
+
+                    const session = await sessionPromiseRef.current;
+                    session?.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: toolResponseResult } } });
+
                 } else if (fc.name === 'clearCanvas') {
                     setIsShaking(true);
-                    setTimeout(() => {
-                        drawingCanvasRef.current?.clearCanvas();
-                        setIsShaking(false);
-                    }, 500); // Duration of shake animation
+                    await new Promise<void>((resolve) => {
+                        setTimeout(() => {
+                            drawingCanvasRef.current?.clearCanvas();
+                            setIsShaking(false);
+                            resolve();
+                        }, 500);
+                    });
+                    const session = await sessionPromiseRef.current;
+                    session?.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "done" } } });
                 }
-                sessionPromiseRef.current?.then((session) => {
-                    session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: toolResponseResult } } });
-                });
             }
         }
 
         const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
         if (audioData && outputAudioContextRef.current) {
-            drawingAudioRef.current?.pause(); // Stop drawing sound if new TTS starts
+            if (isAiDrawingRef.current) {
+                console.log('Suppressing audio because AI is drawing.');
+                return;
+            }
 
             if (audioPlaybackSources.current.size === 0 && radioAudioRef.current && !radioAudioRef.current.paused) {
                 if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
@@ -317,9 +439,15 @@ const App: React.FC = () => {
             source.connect(audioContext.destination);
             source.addEventListener('ended', () => {
                 audioPlaybackSources.current.delete(source);
-                // If this was the last audio chunk and we are in a drawing state, play the loop.
-                if (audioPlaybackSources.current.size === 0 && isAiDrawingRef.current) {
-                    drawingAudioRef.current?.play().catch(e => console.error("Drawing audio play failed:", e));
+                // When the audio queue is empty, check if we should start drawing.
+                if (audioPlaybackSources.current.size === 0 && pendingDrawStartRef.current) {
+                    setTimeout(() => {
+                        // Re-check after a delay to ensure no new audio has arrived.
+                        if (audioPlaybackSources.current.size === 0 && pendingDrawStartRef.current) {
+                            setIsAiDrawing(true);
+                            pendingDrawStartRef.current = false;
+                        }
+                    }, 100); // 100ms of silence
                 }
             });
             source.start(nextAudioStartTimeRef.current);
@@ -354,12 +482,6 @@ const App: React.FC = () => {
                 radioVolumeRestoreTimerRef.current = setTimeout(() => { if (radioAudioRef.current) radioAudioRef.current.volume = 1.0; }, 500);
             }
             currentOutputRef.current = '';
-
-             // If the AI is drawing and no TTS is currently playing, start the drawing sound.
-            // This covers the case where the AI draws without speaking.
-            if (isAiDrawing && audioPlaybackSources.current.size === 0) {
-                drawingAudioRef.current?.play().catch(e => console.error("Drawing audio play failed:", e));
-            }
             
             if (aiMessage === 'Listening...' && !message.toolCall) {
                 setAiMessage('Your turn!');
@@ -368,15 +490,35 @@ const App: React.FC = () => {
     };
     
     const handleAiDrawingComplete = useCallback(() => {
-        drawingAudioRef.current?.pause();
-        if (drawingAudioRef.current) {
-            drawingAudioRef.current.currentTime = 0; // Rewind for next time
-        }
         setAiDrawingToLoad(null);
         setIsAiDrawing(false);
-        setAiMessage('I finished adding to our drawing!');
     }, []);
+
+    const handleSaveDrawing = () => {
+        const imageDataUrl = drawingCanvasRef.current?.getImageDataUrl();
+        if (imageDataUrl) {
+            localStorage.setItem('bloop-bloop-saved-drawing', imageDataUrl);
+            const currentMessage = aiMessage;
+            setAiMessage('Drawing saved!');
+            setTimeout(() => {
+                setAiMessage(prev => (prev === 'Drawing saved!' ? currentMessage : prev));
+            }, 2500);
+        }
+    };
     
+    const handleUndo = () => {
+        drawingCanvasRef.current?.undo();
+    };
+
+    const handleRedo = () => {
+        drawingCanvasRef.current?.redo();
+    };
+
+    const handleHistoryUpdate = useCallback((undo: boolean, redo: boolean) => {
+        setCanUndo(undo);
+        setCanRedo(redo);
+    }, []);
+
     useEffect(() => () => cleanup(), [cleanup]);
     useEffect(() => {
         const handleVisibilityChange = () => { if (status === 'active' && document.visibilityState === 'visible') requestWakeLock(); };
@@ -407,8 +549,31 @@ const App: React.FC = () => {
                       <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
                       <p className="text-xl text-yellow-400/80">"Fun Kids" Edition</p>
                     </div>
-                    <div className="flex items-center space-x-2 md:space-x-4">
+                    <div className="flex items-center space-x-2">
                         <StatusIndicator status={status} />
+                        <button
+                            onClick={handleUndo}
+                            disabled={!canUndo}
+                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Undo drawing"
+                        >
+                            <UndoIcon />
+                        </button>
+                        <button
+                            onClick={handleRedo}
+                            disabled={!canRedo}
+                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Redo drawing"
+                        >
+                            <RedoIcon />
+                        </button>
+                         <button
+                            onClick={handleSaveDrawing}
+                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400"
+                            aria-label="Save drawing"
+                        >
+                            <SaveIcon />
+                        </button>
                         <ThemeToggle />
                     </div>
                 </header>
@@ -429,13 +594,21 @@ const App: React.FC = () => {
                                 shake={isShaking}
                                 aiDrawingToLoad={aiDrawingToLoad}
                                 onAiDrawingComplete={handleAiDrawingComplete}
+                                initialDrawingUrl={initialDrawingUrl}
+                                onHistoryUpdate={handleHistoryUpdate}
                             />
                          </div>
                     </div>
                 </main>
 
                 <footer className="h-24 flex-shrink-0 flex items-center justify-between px-4 md:px-8">
-                    <ControlButton status={status} onStart={handleStart} onStop={handleStop} />
+                    <ControlButton 
+                        status={status}
+                        isKeySelected={isKeySelected}
+                        onStart={handleStart} 
+                        onStop={handleStop}
+                        onSelectKey={handleSelectKey}
+                    />
                     <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
                 </footer>
             </div>
