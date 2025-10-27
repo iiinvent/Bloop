@@ -7,14 +7,12 @@ import StatusIndicator from './components/StatusIndicator';
 import TranscriptDisplay from './components/TranscriptDisplay';
 import DrawingCanvas from './components/DrawingCanvas';
 import ThemeToggle from './components/ThemeToggle';
-import RadioPlayer from './components/RadioPlayer';
 import { playStartSound, playStopSound, playResponseSound, playSendSound } from './utils/soundEffects';
 
 // Audio configuration constants
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const AUDIO_BUFFER_SIZE = 4096;
-const RADIO_STREAM_URL = 'https://wumb.streamguys1.com/wumb919f-sgplayer'; // Family-friendly folk music radio
 
 // Function Declaration for the AI's drawing tool
 const drawSomethingFunctionDeclaration: FunctionDeclaration = {
@@ -53,7 +51,6 @@ const App: React.FC = () => {
     const [currentOutput, setCurrentOutput] = useState('');
     const [clearCanvasKey, setClearCanvasKey] = useState(0);
     const [isCanvasExpanded, setIsCanvasExpanded] = useState(true);
-    const [isRadioPlaying, setIsRadioPlaying] = useState(false);
 
     // Refs for various audio and session objects
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -67,13 +64,11 @@ const App: React.FC = () => {
     const uiAudioContextRef = useRef<AudioContext | null>(null);
     const aiRef = useRef<GoogleGenAI | null>(null);
     const wakeLockSentinelRef = useRef<WakeLockSentinel | null>(null);
-    const radioAudioRef = useRef<HTMLAudioElement | null>(null);
-    // Fix: Replaced NodeJS.Timeout with ReturnType<typeof setTimeout> for browser compatibility.
-    const radioVolumeRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
-    // Refs to avoid stale closures in the onmessage callback
+    // Refs to avoid stale closures in callbacks
     const currentInputRef = useRef('');
     const currentOutputRef = useRef('');
+    const isAiSpeakingRef = useRef(false);
 
 
     // --- Wake Lock Management ---
@@ -107,21 +102,11 @@ const App: React.FC = () => {
             uiAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
     }
-
-    const toggleRadio = useCallback(() => {
-        const radio = radioAudioRef.current;
-        if (radio) {
-            if (radio.paused) {
-                radio.play().catch(e => console.error("Radio play failed:", e));
-            } else {
-                radio.pause();
-            }
-        }
-    }, []);
     
     // Cleanup function to stop all processes
     const cleanup = useCallback(() => {
         releaseWakeLock();
+        isAiSpeakingRef.current = false; // Ensure mic is unmuted on cleanup
         // Stop microphone stream
         if (mediaStreamRef.current) {
             mediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -180,6 +165,7 @@ const App: React.FC = () => {
         setCurrentOutput('');
         currentInputRef.current = '';
         currentOutputRef.current = '';
+        isAiSpeakingRef.current = false; // Reset mute state on start
         setIsCanvasExpanded(true); // Ensure canvas is open on start
 
         try {
@@ -201,6 +187,10 @@ const App: React.FC = () => {
                         scriptProcessorRef.current = inputAudioContextRef.current!.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
                         
                         scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
+                            // If the AI is speaking, don't send mic input to prevent feedback loops
+                            if (isAiSpeakingRef.current) {
+                                return;
+                            }
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
                             if (sessionPromiseRef.current) {
@@ -309,15 +299,12 @@ const App: React.FC = () => {
         // Handle audio output
         const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
         if (audioData && outputAudioContextRef.current) {
-            // Duck radio volume when AI starts speaking (first chunk of a turn)
-            if (audioPlaybackSources.current.size === 0 && radioAudioRef.current && !radioAudioRef.current.paused) {
-                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
-                radioAudioRef.current.volume = 0.2;
-            }
-
-            if (audioPlaybackSources.current.size === 0) { // Play sound only for the first chunk of a response
+            // MUTE MICROPHONE when AI starts speaking
+            if (audioPlaybackSources.current.size === 0) {
+                isAiSpeakingRef.current = true; // Mute the mic
                 playResponseSound(uiAudioContextRef.current);
             }
+
             const audioContext = outputAudioContextRef.current;
             nextAudioStartTimeRef.current = Math.max(nextAudioStartTimeRef.current, audioContext.currentTime);
 
@@ -329,6 +316,10 @@ const App: React.FC = () => {
             source.connect(audioContext.destination);
             source.addEventListener('ended', () => {
                 audioPlaybackSources.current.delete(source);
+                // If this was the last audio chunk, UNMUTE MICROPHONE
+                if (audioPlaybackSources.current.size === 0) {
+                    isAiSpeakingRef.current = false;
+                }
             });
             source.start(nextAudioStartTimeRef.current);
             nextAudioStartTimeRef.current += audioBuffer.duration;
@@ -340,11 +331,7 @@ const App: React.FC = () => {
             audioPlaybackSources.current.forEach(source => source.stop());
             audioPlaybackSources.current.clear();
             nextAudioStartTimeRef.current = 0;
-            // Restore radio volume on interruption
-            if (radioAudioRef.current && !radioAudioRef.current.paused) {
-                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
-                radioAudioRef.current.volume = 1.0;
-            }
+            isAiSpeakingRef.current = false; // Unmute immediately
         }
 
         // Handle transcriptions using refs to avoid stale state
@@ -358,16 +345,6 @@ const App: React.FC = () => {
         }
 
         if (message.serverContent?.turnComplete) {
-            // Restore radio volume after the AI has finished its turn
-            if (radioAudioRef.current && !radioAudioRef.current.paused) {
-                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
-                radioVolumeRestoreTimerRef.current = setTimeout(() => {
-                    if (radioAudioRef.current) {
-                      radioAudioRef.current.volume = 1.0;
-                    }
-                }, 500);
-            }
-
             const finalInput = currentInputRef.current;
             const finalOutput = currentOutputRef.current;
 
@@ -462,33 +439,13 @@ const App: React.FC = () => {
         };
       }, [status, requestWakeLock]);
 
-    // Effect to initialize the radio player
-    useEffect(() => {
-        radioAudioRef.current = new Audio(RADIO_STREAM_URL);
-        radioAudioRef.current.crossOrigin = "anonymous";
-        const radio = radioAudioRef.current;
-        
-        const handlePlay = () => setIsRadioPlaying(true);
-        const handlePause = () => setIsRadioPlaying(false);
-        
-        radio.addEventListener('play', handlePlay);
-        radio.addEventListener('pause', handlePause);
-
-        return () => {
-            radio.removeEventListener('play', handlePlay);
-            radio.removeEventListener('pause', handlePause);
-            radio.pause();
-        }
-    }, []);
-
 
     return (
         <div className="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
             <div className="w-full max-w-4xl mx-auto flex flex-col h-[90vh] bg-white dark:bg-gray-800 shadow-2xl rounded-2xl overflow-hidden">
                 <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
                     <h1 className="text-lg md:text-xl font-bold">Bloop</h1>
-                    <div className="flex items-center space-x-2 md:space-x-4">
-                        <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
+                    <div className="flex items-center space-x-4">
                         <StatusIndicator status={status} />
                         <ThemeToggle />
                     </div>
