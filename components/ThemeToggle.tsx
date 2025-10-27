@@ -20,7 +20,7 @@ const ThemeToggle: React.FC = () => {
     return (
         <button
             onClick={toggleTheme}
-            className="p-2 rounded-full text-yellow-400 hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-100 dark:focus:ring-offset-gray-800 focus:ring-yellow-400"
+            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2"
             aria-label="Toggle theme"
         >
             {theme === 'light' ? <MoonIcon /> : <SunIcon />}

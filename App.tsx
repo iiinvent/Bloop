@@ -1,3 +1,5 @@
+
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import type { Status } from './types';
@@ -216,6 +218,8 @@ const App: React.FC = () => {
         cleanup();
         setStatus('idle');
         setAiMessage('Session ended. Press the left knob to play again!');
+        setIsAiDrawing(false);
+        pendingDrawStartRef.current = false;
     }, [cleanup]);
 
     const handleSelectKey = async () => {
@@ -273,7 +277,18 @@ const App: React.FC = () => {
                         const randomIndex = Math.floor(Math.random() * activityIdeas.length);
                         setAiMessage(activityIdeas[randomIndex]);
                         requestWakeLock();
-                        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+                        
+                        try {
+                            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+                        } catch (err) {
+                            console.error("Microphone access denied:", err);
+                            setStatus('error');
+                            setAiMessage("Microphone access denied. Please allow microphone permissions and try again.");
+                            sessionPromiseRef.current?.then(session => session.close());
+                            cleanup();
+                            return;
+                        }
+
                         mediaStreamSourceRef.current = inputAudioContextRef.current!.createMediaStreamSource(mediaStreamRef.current);
                         scriptProcessorRef.current = inputAudioContextRef.current!.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
                         
@@ -290,7 +305,7 @@ const App: React.FC = () => {
                                     if (imageDataUrl) {
                                         turnCanvasSnapshotRef.current = imageDataUrl;
                                         const base64Data = imageDataUrl.split(',')[1];
-                                        session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'image/jpeg' } });
+                                        session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'image/png' } });
                                     }
                                 }
                                 session.sendRealtimeInput({ media: pcmBlob });
@@ -303,15 +318,17 @@ const App: React.FC = () => {
                     onmessage: (message: LiveServerMessage) => handleServerMessage(message),
                     onerror: (e: ErrorEvent) => {
                         console.error('Session error:', e);
-                        // Reset key selection state if the error is likely due to an invalid key
-                        if (e.message.includes('Network error') || e.message.includes('not found')) {
-                            setStatus('error');
-                            setAiMessage('Connection failed. Please select a valid API key and try again.');
+                        let errorMessage = 'An error occurred. Please try again.';
+                        
+                        if (e.message.includes('not found') || e.message.includes('API key not valid')) {
+                            errorMessage = 'Connection failed. Please select a valid API key and try again.';
                             setIsKeySelected(false);
-                        } else {
-                            setStatus('error');
-                            setAiMessage('An error occurred. Please try again.');
+                        } else if (e.message.includes('Network error')) {
+                            errorMessage = 'Network error. Please check your connection and try again.';
                         }
+                        
+                        setStatus('error');
+                        setAiMessage(errorMessage);
                         cleanup();
                     },
                     onclose: (e: CloseEvent) => {
@@ -324,7 +341,20 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: "You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch. Your conversation must follow this exact flow:\n1. **Look and Comment:** Start your turn by looking at the user's drawing. If they've drawn something new, admire it first (e.g., 'Wow, a new car! Cool!'). Then, briefly acknowledge their voice command (e.g., 'Okay, adding a sun!'). Say this all in one go.\n2. **Draw Immediately:** Right after your comment, you MUST call the `drawSomething` tool. Do not say anything else. The system will then show you drawing.\n3. **Announce and Ask:** After the drawing is finished, announce it with a fun comment (e.g., 'All done! The sun is shining!'). Then, ask what to do next (e.g., 'What should we draw now?').\n4. **Wait Silently:** After you speak, you must wait silently for the user's turn.\n\nKeep all your comments very short, cheerful, and encouraging. The drawing is always a single dark line on a gray background.",
+                    systemInstruction: `You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch. Your conversation must follow this exact flow:
+
+1.  **Look and Comment:** Your first step is to look at the drawing.
+    *   **If the user added something new:** Admire their work with a short, specific, and cheerful comment. Examples: "Ooh, a little boat! I love it!" or "Wow, you added a chimney to the house! It looks so cozy."
+    *   **Then, acknowledge their command:** Immediately follow up by confirming what you're about to draw. Be enthusiastic! Examples: "A fish for the water? You got it!" or "Okay, one fluffy cloud coming right up!"
+    *   **Combine them:** Say your admiration and acknowledgment together in one go, like: "That's a fantastic car you drew! Okay, one big sun for the sky, on it!"
+
+2.  **Draw Immediately:** Right after your comment, you MUST call the \`drawSomething\` tool. Do not say anything else.
+
+3.  **Announce and Ask:** After the drawing is finished, announce it with a fun, relevant comment (e.g., 'All done! The sun is shining bright!'). Then, ask what's next (e.g., 'What should we add now?').
+
+4.  **Wait Silently:** After you speak, wait silently for the user's turn.
+
+Keep all your comments very short (just a few words), cheerful, and encouraging. The drawing is always a single dark line on a gray background.`,
                     tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration, clearCanvasFunctionDeclaration] }],
                 },
             });
@@ -342,6 +372,7 @@ const App: React.FC = () => {
     const handleServerMessage = async (message: LiveServerMessage) => {
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
+                let toolResponseResult = "done";
                 if (fc.name === 'drawSomething') {
                     setAiMessage(`Drawing: ${fc.args.description}...`);
                     
@@ -356,7 +387,6 @@ const App: React.FC = () => {
                         }, 100);
                     }
                     
-                    let toolResponseResult = "done";
                     try {
                         if (!turnCanvasSnapshotRef.current) {
                           throw new Error("Missing canvas snapshot for this turn.");
@@ -364,22 +394,25 @@ const App: React.FC = () => {
         
                         const imagePart = {
                             inlineData: {
-                                mimeType: 'image/jpeg',
+                                mimeType: 'image/png',
                                 data: turnCanvasSnapshotRef.current.split(',')[1],
                             },
                         };
 
                         const textPart = {
-                           text: `You are an expert Etch A Sketch artist with a keen sense of composition and spatial awareness. The user's current drawing is provided as context. Your task is to artistically add a new element based on their request: '${fc.args.description}'.
+                           text: `Your function is to generate an image layer for an Etch A Sketch. You will be given the current drawing and a description of what to add.
 
-**Your output MUST be an image with the exact same dimensions as the input image.**
+**USER REQUEST:** '${fc.args.description}'
 
-**Instructions:**
-1.  **Analyze the Composition:** Look at the existing drawing. Identify objects, characters, and the overall balance. Find the most aesthetically pleasing and logical empty space for the new element.
-2.  **Determine Placement and Scale:** Based on your analysis, decide the perfect location and size for the new element. It should fit naturally within the scene. For example, a sun should be small and in the corner of the sky, while a car should be on the ground and scaled appropriately to other objects. **Critically, do not draw over existing lines.**
-3.  **Generate the Addition:** In the new image you create, draw **ONLY** the new element at the correct scale. The rest of the image must be transparent.
-4.  **Position Correctly:** The new element must be drawn in its correct location within the full-size transparent canvas. When this new image is placed over the original, it should look perfect.
-5.  **Match the Style:** The new drawing must be a single, dark, continuous line, matching the classic Etch A Sketch style.`
+**CRITICAL RULES FOR YOUR OUTPUT IMAGE:**
+1.  **TRANSPARENT BACKGROUND ONLY:** The background of your output image MUST be fully transparent (alpha=0). It MUST NOT contain any colors, patterns, or checkerboards. Only the new drawing element should be visible.
+2.  **LINE ART STYLE:** The new element must be simple line art. It MUST be drawn with a single, slightly bold, dark gray (#404040) line. It MUST NOT be a filled-in shape or have any shading. It should look like it was drawn with a single continuous line on a real Etch A Sketch.
+3.  **NEW ELEMENT ONLY:** Your output image MUST ONLY contain the new element requested by the user. DO NOT include, trace, or redraw any part of the original image that was provided to you.
+
+**Process:**
+1.  Analyze the provided image to find the best empty space for the new element, avoiding existing lines.
+2.  Create the new element as a line drawing according to the rules above.
+3.  Output a PNG image containing only this new line drawing on a transparent background.`
                         };
                         
                         const response = await aiRef.current!.models.generateContent({
@@ -401,9 +434,6 @@ const App: React.FC = () => {
                         toolResponseResult = "error";
                     }
 
-                    const session = await sessionPromiseRef.current;
-                    session?.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: toolResponseResult } } });
-
                 } else if (fc.name === 'clearCanvas') {
                     setIsShaking(true);
                     await new Promise<void>((resolve) => {
@@ -413,8 +443,13 @@ const App: React.FC = () => {
                             resolve();
                         }, 500);
                     });
+                }
+                
+                try {
                     const session = await sessionPromiseRef.current;
-                    session?.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: "done" } } });
+                    session?.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: toolResponseResult } } });
+                } catch (e) {
+                    console.warn('Could not send tool response, session may have been closed.', e);
                 }
             }
         }
@@ -545,16 +580,13 @@ const App: React.FC = () => {
             />
             <div className="w-full max-w-2xl aspect-[4/3.5] bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
                 <header className="flex items-center justify-between text-yellow-400">
-                    <div className="flex flex-col">
-                      <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
-                      <p className="text-xl text-yellow-400/80">"Fun Kids" Edition</p>
-                    </div>
+                    <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
                     <div className="flex items-center space-x-2">
                         <StatusIndicator status={status} />
                         <button
                             onClick={handleUndo}
                             disabled={!canUndo}
-                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             aria-label="Undo drawing"
                         >
                             <UndoIcon />
@@ -562,14 +594,14 @@ const App: React.FC = () => {
                         <button
                             onClick={handleRedo}
                             disabled={!canRedo}
-                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             aria-label="Redo drawing"
                         >
                             <RedoIcon />
                         </button>
                          <button
                             onClick={handleSaveDrawing}
-                            className="p-2 rounded-full text-yellow-400 hover:bg-red-700/50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-red-600 focus:ring-yellow-400"
+                            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2"
                             aria-label="Save drawing"
                         >
                             <SaveIcon />

@@ -1,4 +1,3 @@
-// Fix: Corrected typo in the 'useImperativeHandle' import.
 import React, { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 
 interface DrawingCanvasProps {
@@ -17,90 +16,93 @@ export interface DrawingCanvasRef {
 }
 
 const DRAW_COLOR = '#404040';
-const BG_COLOR = '#cbd5e1'; // This is the Etch A Sketch screen color, it should not change with the theme.
-const BRUSH_SIZE = 3;
+// The background color is now set by the parent element in App.tsx. The canvas is made transparent
+// to ensure that saved/loaded drawings are treated as layers without an opaque background.
+const BRUSH_SIZE = 4;
+
 
 const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ shake, aiDrawingToLoad, onAiDrawingComplete, initialDrawingUrl, onHistoryUpdate }, ref) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null); // The visible canvas
+  
+  // State for layer-based history
+  const layersRef = useRef<HTMLCanvasElement[]>([]); // Array of offscreen canvases, each is a layer
+  const historyIndexRef = useRef(-1); // Points to the top-most visible layer in layersRef
+  
+  // State for live user drawing
   const isDrawingRef = useRef(false);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // History state
-  const historyRef = useRef<string[]>([]);
-  const historyIndexRef = useRef(-1);
+  
   const isInitializedRef = useRef(false);
 
   const getCanvasContext = useCallback(() => {
-    return canvasRef.current?.getContext('2d', { willReadFrequently: true });
+    return canvasRef.current?.getContext('2d');
   }, []);
 
-  const saveState = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    if (historyIndexRef.current < historyRef.current.length - 1) {
-        historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
-    }
-    
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-
-    if (historyRef.current[historyIndexRef.current] === dataUrl) {
-      return;
-    }
-
-    historyRef.current.push(dataUrl);
-    historyIndexRef.current = historyRef.current.length - 1;
-
-    onHistoryUpdate(historyIndexRef.current > 0, false);
-  }, [onHistoryUpdate]);
-
-  const redrawCanvasFromHistory = useCallback((index: number) => {
-    const dataUrl = historyRef.current[index];
-    const canvas = canvasRef.current;
-    const ctx = getCanvasContext();
-    if (!canvas || !ctx || !dataUrl) return;
-
-    const image = new Image();
-    image.src = dataUrl;
-    image.onload = () => {
-        ctx.fillStyle = BG_COLOR;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    };
-  }, [getCanvasContext]);
-
-  const undo = useCallback(() => {
-    if (historyIndexRef.current > 0) {
-        historyIndexRef.current--;
-        redrawCanvasFromHistory(historyIndexRef.current);
-        onHistoryUpdate(historyIndexRef.current > 0, true);
-    }
-  }, [redrawCanvasFromHistory, onHistoryUpdate]);
-
-  const redo = useCallback(() => {
-    if (historyIndexRef.current < historyRef.current.length - 1) {
-        historyIndexRef.current++;
-        redrawCanvasFromHistory(historyIndexRef.current);
-        onHistoryUpdate(true, historyIndexRef.current < historyRef.current.length - 1);
-    }
-  }, [redrawCanvasFromHistory, onHistoryUpdate]);
-
-  const clearCanvas = useCallback(() => {
+  // Renders all visible layers onto the main canvas
+  const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = getCanvasContext();
     if (!canvas || !ctx) return;
-    ctx.fillStyle = BG_COLOR;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    saveState();
-  }, [getCanvasContext, saveState]);
+
+    // 1. Clear the canvas to be transparent. The background color is shown from the parent div.
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 2. Draw all visible layers from history
+    for (let i = 0; i <= historyIndexRef.current; i++) {
+        const layer = layersRef.current[i];
+        if (layer) {
+            ctx.drawImage(layer, 0, 0);
+        }
+    }
+  }, [getCanvasContext]);
+
+  const addLayer = useCallback((newLayer: HTMLCanvasElement) => {
+    // If we have undone, we need to discard the "future" layers
+    if (historyIndexRef.current < layersRef.current.length - 1) {
+        layersRef.current = layersRef.current.slice(0, historyIndexRef.current + 1);
+    }
+    
+    layersRef.current.push(newLayer);
+    historyIndexRef.current++;
+    
+    // The new layer is drawn on top of the existing canvas content for immediate feedback
+    const mainCtx = getCanvasContext();
+    if (mainCtx) {
+        mainCtx.drawImage(newLayer, 0, 0);
+    }
+
+    onHistoryUpdate(historyIndexRef.current > -1, false);
+  }, [getCanvasContext, onHistoryUpdate]);
+
+  const undo = useCallback(() => {
+    if (historyIndexRef.current > -1) {
+        historyIndexRef.current--;
+        renderCanvas();
+        onHistoryUpdate(historyIndexRef.current > -1, true);
+    }
+  }, [renderCanvas, onHistoryUpdate]);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current < layersRef.current.length - 1) {
+        historyIndexRef.current++;
+        renderCanvas();
+        onHistoryUpdate(true, historyIndexRef.current < layersRef.current.length - 1);
+    }
+  }, [renderCanvas, onHistoryUpdate]);
+
+  const clearCanvas = useCallback(() => {
+    layersRef.current = [];
+    historyIndexRef.current = -1;
+    renderCanvas();
+    onHistoryUpdate(false, false);
+  }, [renderCanvas, onHistoryUpdate]);
 
   useImperativeHandle(ref, () => ({
     getImageDataUrl: () => {
         const canvas = canvasRef.current;
-        if (canvas) {
-            return canvas.toDataURL('image/jpeg', 0.9);
-        }
-        return '';
+        // The visible canvas is kept up-to-date, so we can export it directly.
+        // Since the canvas is now transparent, this will be a transparent PNG of the lines.
+        return canvas ? canvas.toDataURL('image/png') : '';
     },
     clearCanvas,
     undo,
@@ -111,34 +113,30 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
   useEffect(() => {
     const canvas = canvasRef.current;
     const parent = canvas?.parentElement;
-    if (!parent) return;
+    if (!canvas || !parent) return;
 
     const resizeObserver = new ResizeObserver(() => {
-      if (canvas && parent) {
         const { width, height } = parent.getBoundingClientRect();
         
         if (canvas.width === width && canvas.height === height) return;
 
-        let contentToPreserve: HTMLCanvasElement | null = null;
-        if (canvas.width > 0 && canvas.height > 0) {
-            contentToPreserve = document.createElement('canvas');
-            contentToPreserve.width = canvas.width;
-            contentToPreserve.height = canvas.height;
-            const tempCtx = contentToPreserve.getContext('2d');
-            tempCtx?.drawImage(canvas, 0, 0);
-        }
+        // Resize all offscreen layer canvases, preserving their content
+        const newLayers: HTMLCanvasElement[] = layersRef.current.map(oldLayer => {
+            const newLayer = document.createElement('canvas');
+            newLayer.width = width;
+            newLayer.height = height;
+            const ctx = newLayer.getContext('2d');
+            ctx?.drawImage(oldLayer, 0, 0, width, height);
+            return newLayer;
+        });
+        layersRef.current = newLayers;
 
+        // Resize the main visible canvas
         canvas.width = width;
         canvas.height = height;
-        const ctx = getCanvasContext();
-        if (!ctx) return;
         
-        ctx.fillStyle = BG_COLOR;
-        ctx.fillRect(0, 0, width, height);
-        
-        if (contentToPreserve) {
-            ctx.drawImage(contentToPreserve, 0, 0, width, height);
-        }
+        // Rerender everything at the new size
+        renderCanvas();
 
         if (!isInitializedRef.current) {
             isInitializedRef.current = true;
@@ -146,81 +144,61 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
                 const image = new Image();
                 image.src = initialDrawingUrl;
                 image.onload = () => {
-                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-                    saveState();
+                    const initialLayer = document.createElement('canvas');
+                    initialLayer.width = canvas.width;
+                    initialLayer.height = canvas.height;
+                    const ctx = initialLayer.getContext('2d');
+                    ctx?.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    addLayer(initialLayer);
                 };
             } else {
-                saveState();
+              // Start with a clean slate
+              clearCanvas();
             }
         }
-      }
     });
 
     resizeObserver.observe(parent);
     
-    return () => {
-      if(parent) {
-        resizeObserver.unobserve(parent);
-      }
-    };
-  }, [getCanvasContext, initialDrawingUrl, saveState]);
+    return () => { if(parent) resizeObserver.unobserve(parent); };
+  }, [renderCanvas, initialDrawingUrl, addLayer, clearCanvas]);
 
-  // Effect to load and process AI drawing
+  // Effect to load and render AI drawing as a new layer
   useEffect(() => {
     if (aiDrawingToLoad) {
-      const image = new Image();
-      image.crossOrigin = 'anonymous'; 
-      image.src = aiDrawingToLoad;
+      const mainCanvas = canvasRef.current;
+      if (!mainCanvas) return;
 
-      image.onload = () => {
-        const mainCanvas = canvasRef.current;
-        const mainCtx = getCanvasContext();
-        if (!mainCanvas || !mainCtx) return;
+      const aiImage = new Image();
+      aiImage.crossOrigin = 'anonymous';
+      aiImage.src = aiDrawingToLoad;
 
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = image.width;
-        tempCanvas.height = image.height;
-        const tempCtx = tempCanvas.getContext('2d');
-        if (!tempCtx) return;
-        tempCtx.drawImage(image, 0, 0);
-
-        const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-        const data = imageData.data;
-        const drawColor = [64, 64, 64]; // #404040
-
-        for (let i = 0; i < data.length; i += 4) {
-          const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          const alpha = data[i + 3];
-
-          const isLinePixel = alpha > 100 && brightness < 128;
-
-          if (isLinePixel) {
-            data[i] = drawColor[0];
-            data[i + 1] = drawColor[1];
-            data[i + 2] = drawColor[2];
-            data[i + 3] = 255;
-          } else {
-            data[i + 3] = 0;
-          }
-        }
-        tempCtx.putImageData(imageData, 0, 0);
-        mainCtx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
+      aiImage.onload = () => {
+        const newLayer = document.createElement('canvas');
+        newLayer.width = mainCanvas.width;
+        newLayer.height = mainCanvas.height;
+        const ctx = newLayer.getContext('2d');
+        if (!ctx) return;
         
-        saveState();
+        ctx.drawImage(aiImage, 0, 0, mainCanvas.width, mainCanvas.height);
+        
+        addLayer(newLayer);
         onAiDrawingComplete();
       };
 
-      image.onerror = () => {
-        console.error("Failed to load AI drawing into canvas.");
+      aiImage.onerror = () => {
+        console.error('Failed to load AI image layer.');
         onAiDrawingComplete();
       };
     }
-  }, [aiDrawingToLoad, getCanvasContext, onAiDrawingComplete, saveState]);
+  }, [aiDrawingToLoad, addLayer, onAiDrawingComplete]);
 
-  // Core drawing logic
+  // Core drawing logic for user input
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    let currentStrokeLayer: HTMLCanvasElement | null = null;
 
     const getCoordinates = (event: MouseEvent | TouchEvent): { x: number; y: number } | null => {
       const rect = canvas.getBoundingClientRect();
@@ -234,6 +212,11 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       if (coords) {
         isDrawingRef.current = true;
         lastPosRef.current = coords;
+
+        // Create a new transparent layer for this drawing stroke
+        currentStrokeLayer = document.createElement('canvas');
+        currentStrokeLayer.width = canvas.width;
+        currentStrokeLayer.height = canvas.height;
       }
     };
 
@@ -243,29 +226,42 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
 
       const coords = getCoordinates(event);
       const lastPos = lastPosRef.current;
-      if (coords && lastPos) {
-        const ctx = getCanvasContext();
-        if (!ctx) return;
+      
+      if (coords && lastPos && currentStrokeLayer) {
+        const tempCtx = currentStrokeLayer.getContext('2d');
+        const mainCtx = getCanvasContext();
+        if (!tempCtx || !mainCtx) return;
 
-        ctx.beginPath();
-        ctx.moveTo(lastPos.x, lastPos.y);
-        ctx.lineTo(coords.x, coords.y);
-        ctx.strokeStyle = DRAW_COLOR;
-        ctx.lineWidth = BRUSH_SIZE;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.stroke();
+        // Common draw function
+        const drawSegment = (ctx: CanvasRenderingContext2D) => {
+          ctx.beginPath();
+          ctx.moveTo(lastPos.x, lastPos.y);
+          ctx.lineTo(coords.x, coords.y);
+          ctx.strokeStyle = DRAW_COLOR;
+          ctx.lineWidth = BRUSH_SIZE;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+        };
+
+        // Draw on the temporary offscreen layer (to capture the full stroke)
+        drawSegment(tempCtx);
+        // And draw on the main canvas for immediate feedback
+        drawSegment(mainCtx);
         
         lastPosRef.current = coords;
       }
     };
 
     const handleEnd = () => {
-      if (isDrawingRef.current) {
-          isDrawingRef.current = false;
-          lastPosRef.current = null;
-          saveState();
+      if (isDrawingRef.current && currentStrokeLayer) {
+          // The main canvas already has the visual of the stroke from handleMove.
+          // We now add the isolated stroke layer to our history stack.
+          addLayer(currentStrokeLayer);
       }
+      isDrawingRef.current = false;
+      lastPosRef.current = null;
+      currentStrokeLayer = null; // Clear temp layer
     };
 
     canvas.addEventListener('mousedown', handleStart);
@@ -285,7 +281,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       canvas.removeEventListener('touchend', handleEnd);
       canvas.removeEventListener('mouseleave', handleEnd);
     };
-  }, [getCanvasContext, saveState]);
+  }, [getCanvasContext, addLayer]);
   
   // Apply shake animation
   useEffect(() => {
