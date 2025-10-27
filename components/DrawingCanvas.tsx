@@ -1,7 +1,8 @@
+// Fix: Corrected typo in the 'useImperativeHandle' import.
 import React, { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 
 interface DrawingCanvasProps {
-  disabled: boolean;
+  shake: boolean;
   aiDrawingToLoad: string | null;
   onAiDrawingComplete: () => void;
 }
@@ -11,11 +12,11 @@ export interface DrawingCanvasRef {
     clearCanvas: () => void;
 }
 
-const DRAW_COLOR = '#404040'; // A dark gray
-const BG_COLOR = '#cbd5e1'; // slate-300
+const DRAW_COLOR = '#404040';
+const BG_COLOR = '#cbd5e1'; // This is the Etch A Sketch screen color, it should not change with the theme.
 const BRUSH_SIZE = 3;
 
-const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ disabled, aiDrawingToLoad, onAiDrawingComplete }, ref) => {
+const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ shake, aiDrawingToLoad, onAiDrawingComplete }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawingRef = useRef(false);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -85,12 +86,12 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       }
     };
   }, [clearCanvas, getCanvasContext]);
-  
+
   // Effect to load and process AI drawing
   useEffect(() => {
     if (aiDrawingToLoad) {
       const image = new Image();
-      image.crossOrigin = 'anonymous'; // Necessary for canvas security with external images
+      image.crossOrigin = 'anonymous'; 
       image.src = aiDrawingToLoad;
 
       image.onload = () => {
@@ -98,49 +99,44 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         const mainCtx = getCanvasContext();
         if (!mainCanvas || !mainCtx) return;
 
-        // The AI image is processed and drawn on top of the existing canvas content.
-        // We do NOT clear the canvas, to allow for collaboration.
+        // DO NOT CLEAR THE CANVAS. We are compositing the new drawing on top.
+        // clearCanvas();
 
-        // Create an off-screen canvas for processing the image
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = image.width;
         tempCanvas.height = image.height;
         const tempCtx = tempCanvas.getContext('2d');
         if (!tempCtx) return;
-
-        // 1. Draw the loaded image to the temp canvas
         tempCtx.drawImage(image, 0, 0);
 
-        // 2. Get the pixel data from the temp canvas
         const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
         const data = imageData.data;
-        const drawColorR = 64, drawColorG = 64, drawColorB = 64; // #404040
+        const drawColor = [64, 64, 64]; // #404040
 
-        // 3. Process every pixel
+        // Process pixels: make everything that isn't a dark line transparent,
+        // and color the dark lines correctly. This ensures style consistency.
         for (let i = 0; i < data.length; i += 4) {
           const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          // If the pixel is light (like a white background), make it transparent
-          if (brightness > 220) {
-            data[i + 3] = 0; // Set alpha to 0
+          const alpha = data[i + 3];
+
+          // A pixel is part of the line if it's dark and not mostly transparent.
+          const isLinePixel = alpha > 100 && brightness < 128;
+
+          if (isLinePixel) {
+            // It's a line, so color it correctly and make it fully opaque.
+            data[i] = drawColor[0];
+            data[i + 1] = drawColor[1];
+            data[i + 2] = drawColor[2];
+            data[i + 3] = 255;
           } else {
-            // If the pixel is dark (the line art), set it to the Etch A Sketch draw color
-            data[i] = drawColorR;
-            data[i + 1] = drawColorG;
-            data[i + 2] = drawColorB;
-            data[i + 3] = 255; // Ensure it's fully opaque
+            // It's background, so make it fully transparent.
+            data[i + 3] = 0;
           }
         }
-        
-        // 4. Put the modified pixel data back onto the temp canvas
         tempCtx.putImageData(imageData, 0, 0);
 
-        // 5. Draw the processed image from the temp canvas to the main, visible canvas
-        const hRatio = mainCanvas.width / tempCanvas.width;
-        const vRatio = mainCanvas.height / tempCanvas.height;
-        const ratio = Math.min(hRatio, vRatio, 0.95); // Use 0.95 to add a little padding
-        const centerShiftX = (mainCanvas.width - tempCanvas.width * ratio) / 2;
-        const centerShiftY = (mainCanvas.height - tempCanvas.height * ratio) / 2;
-        mainCtx.drawImage(tempCanvas, centerShiftX, centerShiftY, tempCanvas.width * ratio, tempCanvas.height * ratio);
+        // Draw the processed addition onto the main canvas.
+        mainCtx.drawImage(tempCanvas, 0, 0, mainCanvas.width, mainCanvas.height);
 
         onAiDrawingComplete();
       };
@@ -155,7 +151,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
   // Core drawing logic
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || disabled) return;
+    if (!canvas) return;
 
     const getCoordinates = (event: MouseEvent | TouchEvent): { x: number; y: number } | null => {
       const rect = canvas.getBoundingClientRect();
@@ -217,18 +213,25 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       canvas.removeEventListener('touchend', handleEnd);
       canvas.removeEventListener('mouseleave', handleEnd);
     };
-  }, [disabled, getCanvasContext]);
+  }, [getCanvasContext]);
+  
+  // Apply shake animation
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas && shake) {
+        canvas.parentElement?.classList.add('shake-animation');
+        setTimeout(() => {
+            canvas.parentElement?.classList.remove('shake-animation');
+        }, 500); // Duration matches CSS
+    }
+  }, [shake])
 
   return (
     <div className="relative w-full h-full">
         <canvas 
             ref={canvasRef} 
-            className={`absolute inset-0 w-full h-full touch-none ${disabled ? 'cursor-not-allowed' : 'cursor-crosshair'}`} 
+            className={`absolute inset-0 w-full h-full touch-none cursor-crosshair`} 
         />
-        {disabled && (
-            <div className="absolute inset-0 bg-gray-500 bg-opacity-20 flex items-center justify-center text-gray-800 font-bold cursor-not-allowed">
-            </div>
-        )}
     </div>
   );
 };

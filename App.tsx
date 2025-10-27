@@ -1,8 +1,3 @@
-
-
-
-
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import type { Status } from './types';
@@ -20,6 +15,8 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const AUDIO_BUFFER_SIZE = 4096;
 const RADIO_STREAM_URL = 'https://listen-funkids.sharp-stream.com/funkids.mp3';
+const DRAWING_LOOP_URL = 'https://dw.zobj.net/download/v1/bsgpdBAOCGUfA3o0W11gFHK22SKeDM9FG5IPMu6RtnDwZwctUEGF37KOz8_McgA77Cv-_ynmT6GqQPtXgOfaKtfvyMqqSJ6oFJZ2-nWhJnF3ysh2z_DmWvcYpwp8/?a=&c=72&f=booloop.mp3&special=1761585023-Zof%2BCgnaeyIUJ8yuG%2FNtlQw%2BWeDGDVM8q7zk8H8%2Fods%3D';
+
 
 // --- AI Tool Declarations ---
 
@@ -27,7 +24,7 @@ const drawSomethingFunctionDeclaration: FunctionDeclaration = {
     name: 'drawSomething',
     parameters: {
       type: Type.OBJECT,
-      description: 'Draws something on the Etch A Sketch screen based on a textual description. This will be added on top of the current drawing.',
+      description: 'Intelligently edits the current Etch A Sketch drawing by adding something based on a textual description. This preserves the original drawing and adds the new element in a sensible way.',
       properties: {
         description: {
           type: Type.STRING,
@@ -71,9 +68,16 @@ const App: React.FC = () => {
     const radioWasPlayingOnStartRef = useRef<boolean>(false);
     const drawingCanvasRef = useRef<DrawingCanvasRef>(null);
     const hasSentCanvasForThisTurnRef = useRef<boolean>(false);
+    const turnCanvasSnapshotRef = useRef<string | null>(null);
     const currentOutputRef = useRef('');
+    const drawingAudioRef = useRef<HTMLAudioElement | null>(null);
+    const isAiDrawingRef = useRef(false);
 
     // --- Core App Logic (Wake Lock, Audio Init, etc.) ---
+
+    useEffect(() => {
+        isAiDrawingRef.current = isAiDrawing;
+    }, [isAiDrawing]);
 
     const requestWakeLock = useCallback(async () => {
       if ('wakeLock' in navigator && document.visibilityState === 'visible') {
@@ -124,6 +128,8 @@ const App: React.FC = () => {
         audioPlaybackSources.current.clear();
         nextAudioStartTimeRef.current = 0;
         
+        drawingAudioRef.current?.pause();
+
         if (radioWasPlayingOnStartRef.current) {
             radioAudioRef.current?.play().catch(e => console.error("Radio resume failed:", e));
             radioWasPlayingOnStartRef.current = false;
@@ -198,6 +204,7 @@ const App: React.FC = () => {
                                     hasSentCanvasForThisTurnRef.current = true;
                                     const imageDataUrl = drawingCanvasRef.current?.getImageDataUrl();
                                     if (imageDataUrl) {
+                                        turnCanvasSnapshotRef.current = imageDataUrl;
                                         const base64Data = imageDataUrl.split(',')[1];
                                         session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'image/jpeg' } });
                                     }
@@ -226,7 +233,7 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: "Your name is Bloop Bloop. You are a fun AI assistant from the 'Fun Kids' Edition, living inside a classic Etch A Sketch toy. The user interacts with you by voice and by drawing. At the start of their turn, you'll see their current drawing. Always be playful and engaging, refer to what's on the screen, and suggest fun things to draw or add. You can add to the user's drawing by calling 'drawSomething', and you can clear the screen by calling 'clearCanvas'. The drawing style is always a single dark line on a gray background. Keep your text responses short and fun, suitable for the toy's screen.",
+                    systemInstruction: "Your name is Bloop Bloop. You are a fun AI assistant from the 'Fun Kids' Edition, living inside a classic Etch A Sketch toy. The user interacts with you by voice and by drawing. At the start of their turn, you'll see the current drawing. Your first task is to look at the drawing and comment on what you see, especially if it's changed. For example, say 'Ooh, a house! What should we add next?' or 'Wow, you added a chimney!'. Always be playful and engaging, and suggest fun things to draw or add. You can add to the user's drawing by calling 'drawSomething' which will intelligently edit the image, and you can clear the screen by calling 'clearCanvas'. The drawing style is always a single dark line on a gray background. Keep your text responses short and fun, suitable for the toy's screen.",
                     tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration, clearCanvasFunctionDeclaration] }],
                 },
             });
@@ -244,31 +251,41 @@ const App: React.FC = () => {
     const handleServerMessage = async (message: LiveServerMessage) => {
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
-                let toolResponseResult = "ok";
+                let toolResponseResult = "done";
                 if (fc.name === 'drawSomething') {
                     setAiMessage('Drawing...');
                     setIsAiDrawing(true);
                     try {
+                        if (!turnCanvasSnapshotRef.current) {
+                          throw new Error("Missing canvas snapshot for this turn.");
+                        }
+        
+                        const imagePart = {
+                            inlineData: {
+                                mimeType: 'image/jpeg',
+                                data: turnCanvasSnapshotRef.current.split(',')[1],
+                            },
+                        };
+
                         const textPart = {
-                            text: `In the style of a monochromatic, single-line drawing on a plain white background, draw: ${fc.args.description}`,
+                           text: `You are an Etch A Sketch drawing assistant. The user's current drawing is provided for context. Their request is to add the following to it: '${fc.args.description}'. Generate an image containing ONLY the new drawing element, in a style that matches the existing drawing (a single dark line). The background of the image you generate MUST be transparent.`
                         };
                         
                         const response = await aiRef.current!.models.generateContent({
                             model: 'gemini-2.5-flash-image',
-                            contents: { parts: [textPart] },
+                            contents: { parts: [imagePart, textPart] },
                             config: { responseModalities: [Modality.IMAGE] },
                         });
 
                         const part = response.candidates?.[0]?.content?.parts?.[0];
                         if (part?.inlineData) {
                             setAiDrawingToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                            toolResponseResult = "ok, I have added to the drawing on the canvas.";
                         } else throw new Error("No image data received.");
                     } catch (error) {
                         console.error("Image generation failed:", error);
-                        setAiMessage("Sorry, I couldn't add to the drawing.");
+                        setAiMessage("Sorry, I couldn't edit the drawing.");
                         setIsAiDrawing(false);
-                        toolResponseResult = "error, failed to generate the drawing.";
+                        toolResponseResult = "error";
                     }
                 } else if (fc.name === 'clearCanvas') {
                     setIsShaking(true);
@@ -276,7 +293,6 @@ const App: React.FC = () => {
                         drawingCanvasRef.current?.clearCanvas();
                         setIsShaking(false);
                     }, 500); // Duration of shake animation
-                    toolResponseResult = "ok, I've cleared the screen.";
                 }
                 sessionPromiseRef.current?.then((session) => {
                     session.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: toolResponseResult } } });
@@ -286,6 +302,8 @@ const App: React.FC = () => {
 
         const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
         if (audioData && outputAudioContextRef.current) {
+            drawingAudioRef.current?.pause(); // Stop drawing sound if new TTS starts
+
             if (audioPlaybackSources.current.size === 0 && radioAudioRef.current && !radioAudioRef.current.paused) {
                 if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
                 radioAudioRef.current.volume = 0.2;
@@ -297,7 +315,13 @@ const App: React.FC = () => {
             const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioContext.destination);
-            source.addEventListener('ended', () => audioPlaybackSources.current.delete(source));
+            source.addEventListener('ended', () => {
+                audioPlaybackSources.current.delete(source);
+                // If this was the last audio chunk and we are in a drawing state, play the loop.
+                if (audioPlaybackSources.current.size === 0 && isAiDrawingRef.current) {
+                    drawingAudioRef.current?.play().catch(e => console.error("Drawing audio play failed:", e));
+                }
+            });
             source.start(nextAudioStartTimeRef.current);
             nextAudioStartTimeRef.current += audioBuffer.duration;
             audioPlaybackSources.current.add(source);
@@ -324,11 +348,19 @@ const App: React.FC = () => {
 
         if (message.serverContent?.turnComplete) {
             hasSentCanvasForThisTurnRef.current = false;
+            turnCanvasSnapshotRef.current = null;
             if (radioAudioRef.current && !radioAudioRef.current.paused) {
                 if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
                 radioVolumeRestoreTimerRef.current = setTimeout(() => { if (radioAudioRef.current) radioAudioRef.current.volume = 1.0; }, 500);
             }
             currentOutputRef.current = '';
+
+             // If the AI is drawing and no TTS is currently playing, start the drawing sound.
+            // This covers the case where the AI draws without speaking.
+            if (isAiDrawing && audioPlaybackSources.current.size === 0) {
+                drawingAudioRef.current?.play().catch(e => console.error("Drawing audio play failed:", e));
+            }
+            
             if (aiMessage === 'Listening...' && !message.toolCall) {
                 setAiMessage('Your turn!');
             }
@@ -336,6 +368,10 @@ const App: React.FC = () => {
     };
     
     const handleAiDrawingComplete = useCallback(() => {
+        drawingAudioRef.current?.pause();
+        if (drawingAudioRef.current) {
+            drawingAudioRef.current.currentTime = 0; // Rewind for next time
+        }
         setAiDrawingToLoad(null);
         setIsAiDrawing(false);
         setAiMessage('I finished adding to our drawing!');
@@ -359,6 +395,12 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen flex flex-col items-center justify-center p-4 font-sans">
+             <audio
+                ref={drawingAudioRef}
+                src={DRAWING_LOOP_URL}
+                loop
+                preload="auto"
+            />
             <div className="w-full max-w-2xl aspect-[4/3.5] bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
                 <header className="flex items-center justify-between text-yellow-400">
                     <div className="flex flex-col">
@@ -372,8 +414,8 @@ const App: React.FC = () => {
                 </header>
 
                 <main className="flex-1 bg-red-700 rounded-lg my-4 p-2 flex flex-col">
-                    <div className={`flex-1 flex flex-col bg-slate-300 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture ${isShaking ? 'shake-animation' : ''}`}>
-                         <div className="p-2 text-gray-800 font-mono h-12 flex items-center overflow-hidden">
+                    <div className={`flex-1 flex flex-col bg-slate-300 dark:bg-slate-400 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
+                         <div className="p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
                             <Ticker text={aiMessage} />
                          </div>
                          <div className="h-1 w-full bg-gray-900/10">
@@ -384,7 +426,7 @@ const App: React.FC = () => {
                          <div className="flex-1 w-full h-full relative">
                             <DrawingCanvas
                                 ref={drawingCanvasRef}
-                                disabled={status !== 'active'}
+                                shake={isShaking}
                                 aiDrawingToLoad={aiDrawingToLoad}
                                 onAiDrawingComplete={handleAiDrawingComplete}
                             />
