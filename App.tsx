@@ -1,5 +1,3 @@
-
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import type { Status } from './types';
@@ -618,20 +616,23 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
 
 
     return (
-        <div className="h-screen w-screen p-4 font-sans box-border">
+        <div className="h-screen w-screen p-4 font-sans box-border flex items-center justify-center">
              <audio
                 ref={drawingAudioRef}
                 src={DRAWING_LOOP_URL}
                 loop
                 preload="auto"
             />
-            <div className="w-full h-full bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
+            <div className="relative w-full h-full max-w-[1024px] max-h-[768px] aspect-[4/3] bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
                 <header className="flex items-center justify-between text-yellow-400">
-                    <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
+                    <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">
+                        {(!isDesktopLayout && !isLandscape) ? (
+                            <span className="leading-tight">Bloop<br />Bloop</span>
+                        ) : (
+                            'Bloop Bloop'
+                        )}
+                    </h1>
                     <div className="flex items-center space-x-2">
-                        {/* For default layout (desktop or portrait), show status first. */}
-                        {!(!isDesktopLayout && isLandscape) && <StatusIndicator status={status} />}
-
                         <button
                             onClick={handleUndo}
                             disabled={!canUndo}
@@ -656,8 +657,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                             <SaveIcon />
                         </button>
                         
-                        {/* For mobile/tablet landscape, show status after action buttons. */}
-                        {(!isDesktopLayout && isLandscape) && <StatusIndicator status={status} />}
+                        <StatusIndicator status={status} />
 
                         <ThemeToggle />
                     </div>

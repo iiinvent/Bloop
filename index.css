@@ -28,7 +28,7 @@ body {
 /* STYLES FOR PROGRESS BAR */
 .animate-progress-shimmer {
   animation: progress-shimmer 1.5s ease-in-out infinite;
-  background-image: linear-gradient(90deg, transparent, #FBBF24, transparent);
+  background-image: linear-gradient(90deg, transparent, #6b7280, transparent);
   background-size: 200% 100%;
 }
 
