@@ -63,10 +63,10 @@ const ControlButton: React.FC<ControlButtonProps> = ({ status, isKeySelected, on
 
   const { icon, action, label } = getButtonContent();
   
-  const baseClasses = 'w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-300 shadow-inner bg-white';
+  const baseClasses = 'w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-150 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-300 bg-slate-200 border-4 border-yellow-500 shadow-lg shadow-[inset_0_4px_6px_rgba(0,0,0,0.2)] active:shadow-inner active:translate-y-1';
   const colorClasses = isActive 
-    ? 'text-gray-500' 
-    : 'text-gray-500';
+    ? 'text-gray-700' 
+    : 'text-gray-700';
   const disabledClasses = isDisabled ? 'opacity-50 cursor-not-allowed' : '';
   
   return (

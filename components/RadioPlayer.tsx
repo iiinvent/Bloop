@@ -22,7 +22,7 @@ const RadioPlayer: React.FC<RadioPlayerProps> = ({ isPlaying, onToggle }) => {
     return (
         <button
             onClick={onToggle}
-            className="w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-300 shadow-inner bg-white text-gray-500"
+            className="w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-150 ease-in-out focus:outline-none focus:ring-4 focus:ring-red-300 bg-slate-200 text-gray-700 border-4 border-yellow-500 shadow-lg shadow-[inset_0_4px_6px_rgba(0,0,0,0.2)] active:shadow-inner active:translate-y-1"
             aria-label={isPlaying ? "Stop kids radio" : "Play kids radio"}
         >
             {isPlaying ? <StopIcon /> : <PlayIcon />}
