@@ -9,7 +9,7 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
   const getStatusInfo = () => {
     switch (status) {
       case 'idle':
-        return { text: 'Ready', color: 'bg-gray-400' };
+        return { text: 'Ready', color: 'bg-yellow-400 animate-pulse' };
       case 'connecting':
         return { text: 'Connecting...', color: 'bg-orange-500 animate-pulse' };
       case 'active':
@@ -26,7 +26,7 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
   return (
     <div className="flex items-center space-x-2">
       <div className={`w-3 h-3 rounded-full ${color}`}></div>
-      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{text}</span>
+      <span className="text-sm font-medium text-yellow-400">{text}</span>
     </div>
   );
 };
