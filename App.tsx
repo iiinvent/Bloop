@@ -50,6 +50,7 @@ const App: React.FC = () => {
     const [currentInput, setCurrentInput] = useState('');
     const [currentOutput, setCurrentOutput] = useState('');
     const [clearCanvasKey, setClearCanvasKey] = useState(0);
+    const [isCanvasExpanded, setIsCanvasExpanded] = useState(true);
 
     // Refs for various audio and session objects
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -135,6 +136,7 @@ const App: React.FC = () => {
         setCurrentOutput('');
         currentInputRef.current = '';
         currentOutputRef.current = '';
+        setIsCanvasExpanded(true); // Ensure canvas is open on start
 
         try {
             aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY! });
@@ -345,10 +347,12 @@ const App: React.FC = () => {
             });
 
             setTranscripts(prev => [...prev, { id: `user-drawing-${Date.now()}`, speaker: 'user', text: '', image: dataUrl }]);
-
-            // Trigger canvas clear in the child component
             setClearCanvasKey(k => k + 1);
 
+            // On mobile, collapse the canvas after sending
+            if (window.innerWidth < 768) { // Tailwind's `md` breakpoint
+                setIsCanvasExpanded(false);
+            }
         } catch (error)
 {
             console.error('Failed to send drawing:', error);
@@ -390,9 +394,44 @@ const App: React.FC = () => {
                 </header>
 
                 <main className="flex-1 flex flex-col md:flex-row overflow-hidden p-2 md:p-4 gap-4">
-                    <div className="w-full aspect-square md:flex-1 md:h-full md:aspect-auto">
-                        <DrawingCanvas onSend={handleSendDrawing} disabled={status !== 'active'} clearKey={clearCanvasKey} />
+                    {/* Unified Canvas Container with collapsible logic */}
+                    <div className={`
+                        w-full relative overflow-hidden transition-all duration-500 ease-in-out
+                        md:flex-1 md:h-full md:aspect-auto
+                        md:!h-full md:!aspect-auto
+                        ${isCanvasExpanded ? 'aspect-square' : 'h-20'}
+                    `}>
+                        {/* Drawing Canvas Wrapper */}
+                        <div className={`
+                            w-full h-full transition-opacity duration-300
+                            md:opacity-100 md:pointer-events-auto
+                            ${isCanvasExpanded ? 'opacity-100' : 'opacity-0 pointer-events-none'}
+                        `}>
+                            <DrawingCanvas
+                                onSend={handleSendDrawing}
+                                disabled={status !== 'active'}
+                                clearKey={clearCanvasKey}
+                            />
+                        </div>
+                        
+                        {/* Expand Button Wrapper */}
+                        <div className={`
+                            absolute inset-0 transition-opacity duration-300 md:hidden
+                            ${!isCanvasExpanded ? 'opacity-100' : 'opacity-0 pointer-events-none'}
+                        `}>
+                            <button
+                                onClick={() => setIsCanvasExpanded(true)}
+                                disabled={status !== 'active'}
+                                className="w-full h-full flex items-center justify-center gap-2 text-lg font-semibold bg-gray-200 dark:bg-gray-700 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                                <span>Draw</span>
+                            </button>
+                        </div>
                     </div>
+
                     <div className="flex-1 flex overflow-hidden md:flex-1 md:h-full">
                         <TranscriptDisplay transcripts={displayedTranscripts} />
                     </div>
