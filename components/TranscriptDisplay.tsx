@@ -35,11 +35,6 @@ const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({ transcripts }) =>
               }`}>
                 {item.text && <p className="text-sm break-words">{item.text}</p>}
                 {item.isLoading && <LoadingSpinner />}
-                {item.image && (
-                    <div className="mt-2">
-                        <img src={item.image} alt="User drawing" className="rounded-md max-w-full h-auto" />
-                    </div>
-                )}
             </div>
             {item.speaker === 'user' && (
               <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">U</div>

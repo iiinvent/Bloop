@@ -1,15 +1,20 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface DrawingCanvasProps {
-  onSend: (dataUrl: string) => void;
   disabled: boolean;
-  clearKey: number;
+  aiDrawingToLoad: string | null;
+  onAiDrawingComplete: () => void;
+}
+
+export interface DrawingCanvasRef {
+    getImageDataUrl: () => string;
+    clearCanvas: () => void;
 }
 
 // Icon components for the toolbar
 const PenIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" /></svg>
+    <svg xmlns="http://www.w.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" /></svg>
 );
 const EraserIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
@@ -22,7 +27,7 @@ const RedoIcon = () => (
 );
 
 
-const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKey }) => {
+const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCanvasProps> = ({ disabled, aiDrawingToLoad, onAiDrawingComplete }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { theme } = useTheme();
   
@@ -51,7 +56,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
     return canvasRef.current?.getContext('2d', { willReadFrequently: true });
   }, []);
 
-  const clearAndSaveInitialState = useCallback(() => {
+  const clearAndSaveInitialState = useCallback((initialImage: HTMLImageElement | null = null) => {
     const canvas = canvasRef.current;
     const ctx = getCanvasContext();
     if (!canvas || !ctx) return;
@@ -59,10 +64,42 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
     ctx.fillStyle = theme === 'dark' ? '#374151' : '#F9FAFB'; // gray-700 dark, gray-50 light
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    if (initialImage) {
+        const hRatio = canvas.width / initialImage.width;
+        const vRatio = canvas.height / initialImage.height;
+        const ratio = Math.min(hRatio, vRatio, 1); // Ensure we don't scale up
+        const centerShift_x = (canvas.width - initialImage.width * ratio) / 2;
+        const centerShift_y = (canvas.height - initialImage.height * ratio) / 2;
+        ctx.drawImage(initialImage, 0, 0, initialImage.width, initialImage.height,
+                      centerShift_x, centerShift_y, initialImage.width * ratio, initialImage.height * ratio);
+    }
+
     const initialImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     setHistory([initialImageData]);
     setHistoryIndex(0);
   }, [getCanvasContext, theme]);
+
+    useImperativeHandle(ref, () => ({
+        getImageDataUrl: () => {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = canvas.width;
+                tempCanvas.height = canvas.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                if (tempCtx) {
+                    tempCtx.fillStyle = theme === 'dark' ? '#1f2937' : '#ffffff';
+                    tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+                    tempCtx.drawImage(canvas, 0, 0);
+                }
+                return tempCanvas.toDataURL('image/jpeg', 0.9);
+            }
+            return '';
+        },
+        clearCanvas: () => {
+            clearAndSaveInitialState();
+        }
+    }));
 
 
   // Effect to make the canvas responsive and initialize history
@@ -82,13 +119,23 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
     resizeObserver.observe(parent);
     return () => resizeObserver.unobserve(parent);
   }, [clearAndSaveInitialState]);
-
-  // Effect to clear canvas when parent requests it
+  
+  // Effect to load AI drawing onto canvas
   useEffect(() => {
-    if (clearKey > 0) {
-      clearAndSaveInitialState();
+    if (aiDrawingToLoad) {
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+      image.src = aiDrawingToLoad;
+      image.onload = () => {
+        clearAndSaveInitialState(image);
+        onAiDrawingComplete();
+      };
+      image.onerror = () => {
+        console.error("Failed to load AI drawing into canvas.");
+        onAiDrawingComplete(); // Still need to signal completion
+      };
     }
-  }, [clearKey, clearAndSaveInitialState]);
+  }, [aiDrawingToLoad, clearAndSaveInitialState, onAiDrawingComplete]);
 
   // The core drawing logic, using direct event listeners for better mobile performance
   useEffect(() => {
@@ -179,22 +226,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
       canvas.removeEventListener('mouseleave', handleEnd);
     };
   }, [disabled, tool, color, brushSize, theme, getCanvasContext, history, historyIndex]);
-
-  const handleSend = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tempCtx = tempCanvas.getContext('2d');
-      if (tempCtx) {
-        tempCtx.fillStyle = theme === 'dark' ? '#1f2937' : '#ffffff';
-        tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        tempCtx.drawImage(canvas, 0, 0);
-      }
-      onSend(tempCanvas.toDataURL('image/jpeg', 0.9));
-    }
-  };
   
   const handleUndo = useCallback(() => {
     if (!canUndo) return;
@@ -236,12 +267,11 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
             <input type="range" min="1" max="50" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} disabled={disabled} className="w-24 cursor-pointer disabled:opacity-50" title="Brush Size"/>
          </div>
          <div className="flex items-center gap-2">
-            <button onClick={clearAndSaveInitialState} disabled={disabled} className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Clear</button>
-            <button onClick={handleSend} disabled={disabled} className="px-3 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50">Send</button>
+            <button onClick={() => clearAndSaveInitialState()} disabled={disabled} className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Clear</button>
          </div>
       </div>
     </div>
   );
 };
 
-export default DrawingCanvas;
+export default forwardRef(DrawingCanvas);

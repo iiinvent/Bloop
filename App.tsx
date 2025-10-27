@@ -5,21 +5,23 @@ import { createBlob, decode, decodeAudioData } from './utils/audioUtils';
 import ControlButton from './components/ControlButton';
 import StatusIndicator from './components/StatusIndicator';
 import TranscriptDisplay from './components/TranscriptDisplay';
-import DrawingCanvas from './components/DrawingCanvas';
+import DrawingCanvas, { DrawingCanvasRef } from './components/DrawingCanvas';
 import ThemeToggle from './components/ThemeToggle';
+import RadioPlayer from './components/RadioPlayer';
 import { playStartSound, playStopSound, playResponseSound, playSendSound } from './utils/soundEffects';
 
 // Audio configuration constants
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const AUDIO_BUFFER_SIZE = 4096;
+const RADIO_STREAM_URL = 'https://listen-funkids.sharp-stream.com/funkids.mp3'; // Fun Kids Radio (direct stream)
 
 // Function Declaration for the AI's drawing tool
 const drawSomethingFunctionDeclaration: FunctionDeclaration = {
     name: 'drawSomething',
     parameters: {
       type: Type.OBJECT,
-      description: 'Draws an image based on a textual description.',
+      description: 'Draws an image based on a textual description and places it on the user\'s canvas for them to see and edit.',
       properties: {
         description: {
           type: Type.STRING,
@@ -49,8 +51,9 @@ const App: React.FC = () => {
     const [transcripts, setTranscripts] = useState<Transcript[]>([]);
     const [currentInput, setCurrentInput] = useState('');
     const [currentOutput, setCurrentOutput] = useState('');
-    const [clearCanvasKey, setClearCanvasKey] = useState(0);
     const [isCanvasExpanded, setIsCanvasExpanded] = useState(true);
+    const [isRadioPlaying, setIsRadioPlaying] = useState(false);
+    const [aiDrawingToLoad, setAiDrawingToLoad] = useState<string | null>(null);
 
     // Refs for various audio and session objects
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -64,11 +67,15 @@ const App: React.FC = () => {
     const uiAudioContextRef = useRef<AudioContext | null>(null);
     const aiRef = useRef<GoogleGenAI | null>(null);
     const wakeLockSentinelRef = useRef<WakeLockSentinel | null>(null);
+    const radioAudioRef = useRef<HTMLAudioElement | null>(null);
+    const radioVolumeRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const radioWasPlayingOnStartRef = useRef<boolean>(false);
+    const drawingCanvasRef = useRef<DrawingCanvasRef>(null);
+    const hasSentCanvasForThisTurnRef = useRef<boolean>(false);
     
-    // Refs to avoid stale closures in callbacks
+    // Refs to avoid stale closures in the onmessage callback
     const currentInputRef = useRef('');
     const currentOutputRef = useRef('');
-    const isAiSpeakingRef = useRef(false);
 
 
     // --- Wake Lock Management ---
@@ -77,12 +84,15 @@ const App: React.FC = () => {
         try {
           wakeLockSentinelRef.current = await navigator.wakeLock.request('screen');
           wakeLockSentinelRef.current.addEventListener('release', () => {
-            // The lock was released by the system, we'll re-acquire it on visibility change
             console.log('Wake Lock was released by the system.');
           });
           console.log('Screen Wake Lock is active.');
         } catch (err: any) {
-          console.error(`Failed to acquire Wake Lock: ${err.name}, ${err.message}`);
+          if (err.name === 'NotAllowedError') {
+            console.warn('Screen Wake Lock permission denied. This is expected in some environments (e.g., iframes) and the app will function without it.');
+          } else {
+            console.error(`Failed to acquire Wake Lock: ${err.name}, ${err.message}`);
+          }
         }
       }
     }, []);
@@ -102,11 +112,21 @@ const App: React.FC = () => {
             uiAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
     }
+
+    const toggleRadio = useCallback(() => {
+        const radio = radioAudioRef.current;
+        if (radio) {
+            if (radio.paused) {
+                radio.play().catch(e => console.error("Radio play failed:", e));
+            } else {
+                radio.pause();
+            }
+        }
+    }, []);
     
     // Cleanup function to stop all processes
     const cleanup = useCallback(() => {
         releaseWakeLock();
-        isAiSpeakingRef.current = false; // Ensure mic is unmuted on cleanup
         // Stop microphone stream
         if (mediaStreamRef.current) {
             mediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -134,6 +154,12 @@ const App: React.FC = () => {
         audioPlaybackSources.current.forEach(source => source.stop());
         audioPlaybackSources.current.clear();
         nextAudioStartTimeRef.current = 0;
+        
+        // Resume radio if it was playing before the session started
+        if (radioWasPlayingOnStartRef.current) {
+            radioAudioRef.current?.play().catch(e => console.error("Radio play failed on resume:", e));
+            radioWasPlayingOnStartRef.current = false;
+        }
     }, [releaseWakeLock]);
 
     const handleStop = useCallback(async () => {
@@ -159,14 +185,21 @@ const App: React.FC = () => {
         }
         initUiAudio();
         playStartSound(uiAudioContextRef.current);
+        
+        // Pause radio if it's playing
+        if (isRadioPlaying) {
+            radioWasPlayingOnStartRef.current = true;
+            radioAudioRef.current?.pause();
+        }
+
         setStatus('connecting');
         setTranscripts([]);
         setCurrentInput('');
         setCurrentOutput('');
         currentInputRef.current = '';
         currentOutputRef.current = '';
-        isAiSpeakingRef.current = false; // Reset mute state on start
         setIsCanvasExpanded(true); // Ensure canvas is open on start
+        hasSentCanvasForThisTurnRef.current = false; // Reset canvas sending flag
 
         try {
             aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY! });
@@ -181,20 +214,28 @@ const App: React.FC = () => {
                         console.log('Session opened.');
                         setStatus('active');
                         requestWakeLock(); // Acquire wake lock
-                        // Start streaming microphone audio
-                        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        // Start streaming microphone audio with echo cancellation
+                        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
                         mediaStreamSourceRef.current = inputAudioContextRef.current!.createMediaStreamSource(mediaStreamRef.current);
                         scriptProcessorRef.current = inputAudioContextRef.current!.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
                         
                         scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                            // If the AI is speaking, don't send mic input to prevent feedback loops
-                            if (isAiSpeakingRef.current) {
-                                return;
-                            }
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
                             if (sessionPromiseRef.current) {
                                 sessionPromiseRef.current.then((session) => {
+                                    // On the first audio chunk of a turn, send the canvas image first
+                                    if (!hasSentCanvasForThisTurnRef.current) {
+                                        hasSentCanvasForThisTurnRef.current = true; // Set immediately to prevent race conditions
+                                        const imageDataUrl = drawingCanvasRef.current?.getImageDataUrl();
+                                        if (imageDataUrl) {
+                                            const base64Data = imageDataUrl.split(',')[1];
+                                            session.sendRealtimeInput({
+                                                media: { data: base64Data, mimeType: 'image/jpeg' }
+                                            });
+                                        }
+                                    }
+                                    // Send the audio chunk
                                     session.sendRealtimeInput({ media: pcmBlob });
                                 });
                             }
@@ -223,7 +264,7 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: "You are a fun, friendly, and creative assistant. You can talk about drawings too. To illustrate something, you have a tool called 'drawSomething' you can use. By default, your drawings will be simple line art. If the user asks for a specific style (like 'photorealistic', 'watercolor', or 'cartoon'), include that in your description for the drawing tool.",
+                    systemInstruction: "You are Bloop, a fun, friendly, and creative AI assistant. At the beginning of the user's turn, you will receive an image showing the current state of their drawing canvas. Use this image as context for the conversation. You can comment on it, answer questions about it, or use your 'drawSomething' tool to add to it if the user asks. By default, your own drawings are simple line art unless the user requests a specific style (like 'photorealistic' or 'cartoon').",
                     tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration] }],
                 },
             });
@@ -243,18 +284,18 @@ const App: React.FC = () => {
             for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === 'drawSomething') {
                     const originalDescription = fc.args.description ?? 'something creative';
-                    const drawingId = `drawing-${Date.now()}`;
+                    const drawingMessageId = `ai-draw-msg-${Date.now()}`;
                     
                     let imagePrompt = originalDescription;
                     if (!containsStyleKeyword(originalDescription)) {
                         imagePrompt = `line art drawing of ${originalDescription}`;
                     }
 
-                    // Add a placeholder message
+                    // Add a placeholder message to transcript
                     setTranscripts(prev => [...prev, {
-                        id: drawingId,
+                        id: drawingMessageId,
                         speaker: 'ai',
-                        text: `Drawing: "${originalDescription}"`,
+                        text: `Okay, I'll draw: "${originalDescription}"`,
                         isLoading: true,
                     }]);
 
@@ -270,8 +311,10 @@ const App: React.FC = () => {
                         if (part?.inlineData) {
                             const base64Image = part.inlineData.data;
                             const imageUrl = `data:${part.inlineData.mimeType};base64,${base64Image}`;
-                            // Replace placeholder with the actual image
-                            setTranscripts(prev => prev.map(t => t.id === drawingId ? { ...t, text: '', image: imageUrl, isLoading: false } : t));
+                            // Set the image data to be loaded by the canvas
+                            setAiDrawingToLoad(imageUrl);
+                            // Update placeholder message to indicate success
+                            setTranscripts(prev => prev.map(t => t.id === drawingMessageId ? { ...t, isLoading: false } : t));
                         } else {
                             throw new Error("No image data received.");
                         }
@@ -279,7 +322,7 @@ const App: React.FC = () => {
                     } catch (error) {
                         console.error("Image generation failed:", error);
                         // Update placeholder with an error message
-                        setTranscripts(prev => prev.map(t => t.id === drawingId ? { ...t, text: "Sorry, I couldn't create the drawing.", isLoading: false } : t));
+                        setTranscripts(prev => prev.map(t => t.id === drawingMessageId ? { ...t, text: "Sorry, I couldn't create the drawing.", isLoading: false } : t));
                     }
                     
                     // Respond to the tool call
@@ -288,7 +331,7 @@ const App: React.FC = () => {
                             functionResponses: {
                                 id: fc.id,
                                 name: fc.name,
-                                response: { result: "ok, the drawing is displayed." },
+                                response: { result: "ok, I have put the drawing on the canvas for the user." },
                             }
                         });
                     });
@@ -299,12 +342,15 @@ const App: React.FC = () => {
         // Handle audio output
         const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
         if (audioData && outputAudioContextRef.current) {
-            // MUTE MICROPHONE when AI starts speaking
-            if (audioPlaybackSources.current.size === 0) {
-                isAiSpeakingRef.current = true; // Mute the mic
-                playResponseSound(uiAudioContextRef.current);
+            // Duck radio volume when AI starts speaking (first chunk of a turn)
+            if (audioPlaybackSources.current.size === 0 && radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioAudioRef.current.volume = 0.2;
             }
 
+            if (audioPlaybackSources.current.size === 0) { // Play sound only for the first chunk of a response
+                playResponseSound(uiAudioContextRef.current);
+            }
             const audioContext = outputAudioContextRef.current;
             nextAudioStartTimeRef.current = Math.max(nextAudioStartTimeRef.current, audioContext.currentTime);
 
@@ -316,10 +362,6 @@ const App: React.FC = () => {
             source.connect(audioContext.destination);
             source.addEventListener('ended', () => {
                 audioPlaybackSources.current.delete(source);
-                // If this was the last audio chunk, UNMUTE MICROPHONE
-                if (audioPlaybackSources.current.size === 0) {
-                    isAiSpeakingRef.current = false;
-                }
             });
             source.start(nextAudioStartTimeRef.current);
             nextAudioStartTimeRef.current += audioBuffer.duration;
@@ -331,7 +373,11 @@ const App: React.FC = () => {
             audioPlaybackSources.current.forEach(source => source.stop());
             audioPlaybackSources.current.clear();
             nextAudioStartTimeRef.current = 0;
-            isAiSpeakingRef.current = false; // Unmute immediately
+            // Restore radio volume on interruption
+            if (radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioAudioRef.current.volume = 1.0;
+            }
         }
 
         // Handle transcriptions using refs to avoid stale state
@@ -345,23 +391,25 @@ const App: React.FC = () => {
         }
 
         if (message.serverContent?.turnComplete) {
+            // Reset the flag so the canvas is sent on the next user utterance
+            hasSentCanvasForThisTurnRef.current = false;
+
+            // Restore radio volume after the AI has finished its turn
+            if (radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioVolumeRestoreTimerRef.current = setTimeout(() => {
+                    if (radioAudioRef.current) {
+                      radioAudioRef.current.volume = 1.0;
+                    }
+                }, 500);
+            }
+
             const finalInput = currentInputRef.current;
             const finalOutput = currentOutputRef.current;
 
             if (finalInput || finalOutput) {
                  setTranscripts(prev => {
                     const newEntries: Transcript[] = [];
-                    // Check if last entry was a user drawing without text, and merge new text into it
-                    const lastEntry = prev.length > 0 ? prev[prev.length - 1] : null;
-                    if (finalInput && lastEntry?.speaker === 'user' && lastEntry.image && !lastEntry.text) {
-                        const updatedTranscripts = [...prev.slice(0, -1), { ...lastEntry, text: finalInput }];
-                        if (finalOutput) {
-                            newEntries.push({ id: `ai-${Date.now()}`, speaker: 'ai', text: finalOutput });
-                        }
-                        return [...updatedTranscripts, ...newEntries];
-                    }
-                    
-                    // Otherwise, add new entries as normal
                     if (finalInput) newEntries.push({ id: `user-${Date.now()}`, speaker: 'user', text: finalInput });
                     if (finalOutput) newEntries.push({ id: `ai-${Date.now()}`, speaker: 'ai', text: finalOutput });
                     return [...prev, ...newEntries];
@@ -373,34 +421,6 @@ const App: React.FC = () => {
             setCurrentOutput('');
         }
     };
-
-    const handleSendDrawing = useCallback(async (dataUrl: string) => {
-        if (!sessionPromiseRef.current || status !== 'active') {
-            console.warn('Cannot send drawing, session is not active.');
-            return;
-        }
-        initUiAudio();
-        playSendSound(uiAudioContextRef.current);
-
-        const base64Data = dataUrl.split(',')[1];
-        try {
-            const session = await sessionPromiseRef.current;
-            session.sendRealtimeInput({
-                media: { data: base64Data, mimeType: 'image/jpeg' }
-            });
-
-            setTranscripts(prev => [...prev, { id: `user-drawing-${Date.now()}`, speaker: 'user', text: '', image: dataUrl }]);
-            setClearCanvasKey(k => k + 1);
-
-            // On mobile, collapse the canvas after sending
-            if (window.innerWidth < 768) { // Tailwind's `md` breakpoint
-                setIsCanvasExpanded(false);
-            }
-        } catch (error)
-{
-            console.error('Failed to send drawing:', error);
-        }
-    }, [status]);
     
     // Combine final transcripts with in-progress ones for live display
     const displayedTranscripts = useMemo(() => {
@@ -414,6 +434,9 @@ const App: React.FC = () => {
         return [...transcripts, ...liveTranscripts].filter(t => t.text || t.image);
     }, [transcripts, currentInput, currentOutput]);
 
+    const handleAiDrawingComplete = useCallback(() => {
+        setAiDrawingToLoad(null);
+    }, []);
     
     // Effect for graceful shutdown
     useEffect(() => {
@@ -439,13 +462,33 @@ const App: React.FC = () => {
         };
       }, [status, requestWakeLock]);
 
+    // Effect to initialize the radio player
+    useEffect(() => {
+        radioAudioRef.current = new Audio(RADIO_STREAM_URL);
+        radioAudioRef.current.crossOrigin = "anonymous";
+        const radio = radioAudioRef.current;
+        
+        const handlePlay = () => setIsRadioPlaying(true);
+        const handlePause = () => setIsRadioPlaying(false);
+        
+        radio.addEventListener('play', handlePlay);
+        radio.addEventListener('pause', handlePause);
+
+        return () => {
+            radio.removeEventListener('play', handlePlay);
+            radio.removeEventListener('pause', handlePause);
+            radio.pause();
+        }
+    }, []);
+
 
     return (
         <div className="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
             <div className="w-full max-w-4xl mx-auto flex flex-col h-[90vh] bg-white dark:bg-gray-800 shadow-2xl rounded-2xl overflow-hidden">
                 <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
                     <h1 className="text-lg md:text-xl font-bold">Bloop</h1>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2 md:space-x-4">
+                        <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
                         <StatusIndicator status={status} />
                         <ThemeToggle />
                     </div>
@@ -455,11 +498,9 @@ const App: React.FC = () => {
                     <div className="flex-1 flex flex-col overflow-hidden md:flex-1 md:h-full">
                         <TranscriptDisplay transcripts={displayedTranscripts} />
                     </div>
-                    {/* Unified Canvas Container with collapsible logic */}
                     <div className={`
                         w-full flex-shrink-0 relative overflow-hidden transition-all duration-500 ease-in-out
                         md:flex-1 md:h-full md:aspect-auto
-                        md:!h-full
                         ${isCanvasExpanded ? 'aspect-square' : 'h-20'}
                     `}>
                         {/* Drawing Canvas Wrapper */}
@@ -469,9 +510,10 @@ const App: React.FC = () => {
                             ${isCanvasExpanded ? 'opacity-100' : 'opacity-0 pointer-events-none'}
                         `}>
                             <DrawingCanvas
-                                onSend={handleSendDrawing}
+                                ref={drawingCanvasRef}
                                 disabled={status !== 'active'}
-                                clearKey={clearCanvasKey}
+                                aiDrawingToLoad={aiDrawingToLoad}
+                                onAiDrawingComplete={handleAiDrawingComplete}
                             />
                         </div>
                         
@@ -485,14 +527,13 @@ const App: React.FC = () => {
                                 disabled={status !== 'active'}
                                 className="w-full h-full flex items-center justify-center gap-2 text-lg font-semibold bg-gray-200 dark:bg-gray-700 rounded-lg shadow disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <svg xmlns="http://www.w.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                 </svg>
                                 <span>Draw</span>
                             </button>
                         </div>
                     </div>
-
                 </main>
 
                 <footer className="p-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center">
