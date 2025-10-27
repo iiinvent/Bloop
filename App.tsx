@@ -22,15 +22,15 @@ const DRAWING_LOOP_URL = 'https://cdn.buildspace.host/bloopbloop/audio/pencil.mp
 
 // --- AI Tool Declarations ---
 
-const drawSomethingFunctionDeclaration: FunctionDeclaration = {
-    name: 'drawSomething',
+const editDrawingFunctionDeclaration: FunctionDeclaration = {
+    name: 'editDrawing',
     parameters: {
       type: Type.OBJECT,
-      description: 'Intelligently edits the current Etch A Sketch drawing by adding something based on a textual description. This preserves the original drawing and adds the new element in a sensible way.',
+      description: 'Edits the current drawing by adding, removing, or changing elements based on a textual description. This generates a completely new version of the drawing.',
       properties: {
         description: {
           type: Type.STRING,
-          description: 'A detailed description of what to add to the drawing. For example: "a sun in the sky" or "a party hat on the cat"',
+          description: 'A detailed description of the edit to make. For example: "add a sun in the sky", "remove the cat", or "make the house bigger".',
         },
       },
       required: ['description'],
@@ -67,13 +67,14 @@ const App: React.FC = () => {
     const [status, setStatus] = useState<Status>('idle');
     const [aiMessage, setAiMessage] = useState('Press the left knob to begin!');
     const [isRadioPlaying, setIsRadioPlaying] = useState(false);
-    const [aiDrawingToLoad, setAiDrawingToLoad] = useState<string | null>(null);
+    const [aiImageToLoad, setAiImageToLoad] = useState<string | null>(null);
     const [isShaking, setIsShaking] = useState(false);
     const [isAiDrawing, setIsAiDrawing] = useState(false);
     const [initialDrawingUrl, setInitialDrawingUrl] = useState<string | null>(null);
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
     const [isKeySelected, setIsKeySelected] = useState(false);
+    const [isDesktopLayout, setIsDesktopLayout] = useState(window.matchMedia('(min-width: 768px)').matches);
 
     // Refs
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -108,6 +109,13 @@ const App: React.FC = () => {
             }
         };
         checkApiKey();
+    }, []);
+    
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(min-width: 768px)');
+        const handler = () => setIsDesktopLayout(mediaQuery.matches);
+        mediaQuery.addEventListener('change', handler);
+        return () => mediaQuery.removeEventListener('change', handler);
     }, []);
 
     useEffect(() => {
@@ -260,6 +268,11 @@ const App: React.FC = () => {
             
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
             outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
+            
+            const gridInstruction = isDesktopLayout
+                ? "You are in desktop mode. The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
+                : "You are in tablet/mobile mode. The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
+
 
             sessionPromiseRef.current = aiRef.current.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -341,21 +354,26 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: `You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch. Your conversation must follow this exact flow:
+                    systemInstruction: `You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch.
 
+**GRID RULES:**
+*   ${gridInstruction}
+*   When you call \`editDrawing\`, you are regenerating the entire image. You must use the virtual grid to plan the layout.
+*   When adding new objects, place them in empty grid cells. Start with a size of 1x1, 1x2, or 2x1 cells.
+*   Analyze the existing drawing to know which cells are occupied. Do not overlap drawings unless the user asks.
+*   Create a balanced, uncluttered drawing. Spread elements out naturally across the grid.
+
+**CONVERSATION FLOW:**
 1.  **Look and Comment:** Your first step is to look at the drawing.
-    *   **If the user added something new:** Admire their work with a short, specific, and cheerful comment. Examples: "Ooh, a little boat! I love it!" or "Wow, you added a chimney to the house! It looks so cozy."
-    *   **Then, acknowledge their command:** Immediately follow up by confirming what you're about to draw. Be enthusiastic! Examples: "A fish for the water? You got it!" or "Okay, one fluffy cloud coming right up!"
-    *   **Combine them:** Say your admiration and acknowledgment together in one go, like: "That's a fantastic car you drew! Okay, one big sun for the sky, on it!"
-
-2.  **Draw Immediately:** Right after your comment, you MUST call the \`drawSomething\` tool. Do not say anything else.
-
+    *   **If the user added something new:** Admire their work with a short, specific, and cheerful comment. (e.g., "Ooh, a little boat! I love it!")
+    *   **Then, acknowledge their command:** Immediately follow up by confirming what you're about to draw. (e.g., "A fish for the water? You got it!")
+    *   **Combine them:** Say your admiration and acknowledgment together in one go. (e.g., "That's a fantastic car you drew! Okay, one big sun for the sky, on it!")
+2.  **Draw Immediately:** Right after your comment, you MUST call the \`editDrawing\` tool. Do not say anything else.
 3.  **Announce and Ask:** After the drawing is finished, announce it with a fun, relevant comment (e.g., 'All done! The sun is shining bright!'). Then, ask what's next (e.g., 'What should we add now?').
-
 4.  **Wait Silently:** After you speak, wait silently for the user's turn.
 
 Keep all your comments very short (just a few words), cheerful, and encouraging. The drawing is always a single dark line on a gray background.`,
-                    tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration, clearCanvasFunctionDeclaration] }],
+                    tools: [{ functionDeclarations: [editDrawingFunctionDeclaration, clearCanvasFunctionDeclaration] }],
                 },
             });
 
@@ -373,7 +391,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
                 let toolResponseResult = "done";
-                if (fc.name === 'drawSomething') {
+                if (fc.name === 'editDrawing') {
                     setAiMessage(`Drawing: ${fc.args.description}...`);
                     
                     pendingDrawStartRef.current = true;
@@ -398,21 +416,23 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                                 data: turnCanvasSnapshotRef.current.split(',')[1],
                             },
                         };
+                        
+                        const gridContext = isDesktopLayout
+                            ? "The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
+                            : "The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
 
                         const textPart = {
-                           text: `Your function is to generate an image layer for an Etch A Sketch. You will be given the current drawing and a description of what to add.
+                           text: `You are an expert Etch A Sketch artist. You will be given an image of the current drawing and a description of how to change it. Your task is to return a completely new image that incorporates the requested change, redrawing the entire scene in the Etch A Sketch style.
+
+**GRID CONTEXT:** ${gridContext} Use this grid to plan the layout of the new image. When adding a new item, place it in an empty area of the grid. Aim for a balanced, natural composition. The new item should initially occupy a small part of the grid (e.g., 1x1 or 1x2 cells).
 
 **USER REQUEST:** '${fc.args.description}'
 
 **CRITICAL RULES FOR YOUR OUTPUT IMAGE:**
-1.  **TRANSPARENT BACKGROUND ONLY:** The background of your output image MUST be fully transparent (alpha=0). It MUST NOT contain any colors, patterns, or checkerboards. Only the new drawing element should be visible.
-2.  **LINE ART STYLE:** The new element must be simple line art. It MUST be drawn with a single, slightly bold, dark gray (#404040) line. It MUST NOT be a filled-in shape or have any shading. It should look like it was drawn with a single continuous line on a real Etch A Sketch.
-3.  **NEW ELEMENT ONLY:** Your output image MUST ONLY contain the new element requested by the user. DO NOT include, trace, or redraw any part of the original image that was provided to you.
-
-**Process:**
-1.  Analyze the provided image to find the best empty space for the new element, avoiding existing lines.
-2.  Create the new element as a line drawing according to the rules above.
-3.  Output a PNG image containing only this new line drawing on a transparent background.`
+1.  **PRESERVE EXISTING ART:** You must perfectly preserve the scale, position, and line style of all art from the original image. Do not change, move, or resize any part of the drawing that was not requested in the user's prompt.
+2.  **COMPLETE IMAGE:** Your output MUST be the full, complete drawing with the change applied. It should contain the original art (preserved perfectly) plus only the new art.
+3.  **TRANSPARENT BACKGROUND:** This is the most important rule. The background of your output image MUST be fully transparent. The drawing will be placed on a special gray, textured surface, so any non-transparent background in your image (like white or gray) will cover up the texture and ruin the effect.
+4.  **LINE ART STYLE:** All art, new and old, MUST be simple line art using a single, slightly bold, dark gray (#404040) line. It must look like it was drawn with a single continuous line on a real Etch A Sketch. Do not use filled shapes or shading.`
                         };
                         
                         const response = await aiRef.current!.models.generateContent({
@@ -423,7 +443,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
 
                         const part = response.candidates?.[0]?.content?.parts?.[0];
                         if (part?.inlineData) {
-                            setAiDrawingToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                            setAiImageToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                         } else {
                             throw new Error("No image data received.");
                         }
@@ -525,7 +545,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
     };
     
     const handleAiDrawingComplete = useCallback(() => {
-        setAiDrawingToLoad(null);
+        setAiImageToLoad(null);
         setIsAiDrawing(false);
     }, []);
 
@@ -571,14 +591,14 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
     }, []);
 
     return (
-        <div className="min-h-screen flex flex-col items-center justify-center p-4 font-sans">
+        <div className="h-screen w-screen p-4 font-sans box-border">
              <audio
                 ref={drawingAudioRef}
                 src={DRAWING_LOOP_URL}
                 loop
                 preload="auto"
             />
-            <div className="w-full max-w-2xl aspect-[4/3.5] bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
+            <div className="w-full h-full bg-red-600 rounded-2xl shadow-2xl p-4 md:p-6 flex flex-col shadow-[inset_0_0_10px_rgba(0,0,0,0.3)]">
                 <header className="flex items-center justify-between text-yellow-400">
                     <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
                     <div className="flex items-center space-x-2">
@@ -601,7 +621,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                         </button>
                          <button
                             onClick={handleSaveDrawing}
-                            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2"
+                            className="p-2 rounded-full text-yellow-400 ring-yellow-400 ring-offset-red-600 ring-offset-2 focus:outline-none hover:ring-2 focus:ring-2 disabled:opacity-50"
                             aria-label="Save drawing"
                         >
                             <SaveIcon />
@@ -624,7 +644,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                             <DrawingCanvas
                                 ref={drawingCanvasRef}
                                 shake={isShaking}
-                                aiDrawingToLoad={aiDrawingToLoad}
+                                aiImageToLoad={aiImageToLoad}
                                 onAiDrawingComplete={handleAiDrawingComplete}
                                 initialDrawingUrl={initialDrawingUrl}
                                 onHistoryUpdate={handleHistoryUpdate}
