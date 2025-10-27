@@ -7,12 +7,14 @@ import StatusIndicator from './components/StatusIndicator';
 import TranscriptDisplay from './components/TranscriptDisplay';
 import DrawingCanvas from './components/DrawingCanvas';
 import ThemeToggle from './components/ThemeToggle';
+import RadioPlayer from './components/RadioPlayer';
 import { playStartSound, playStopSound, playResponseSound, playSendSound } from './utils/soundEffects';
 
 // Audio configuration constants
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const AUDIO_BUFFER_SIZE = 4096;
+const RADIO_STREAM_URL = 'https://wumb.streamguys1.com/wumb919f-sgplayer'; // Family-friendly folk music radio
 
 // Function Declaration for the AI's drawing tool
 const drawSomethingFunctionDeclaration: FunctionDeclaration = {
@@ -51,6 +53,7 @@ const App: React.FC = () => {
     const [currentOutput, setCurrentOutput] = useState('');
     const [clearCanvasKey, setClearCanvasKey] = useState(0);
     const [isCanvasExpanded, setIsCanvasExpanded] = useState(true);
+    const [isRadioPlaying, setIsRadioPlaying] = useState(false);
 
     // Refs for various audio and session objects
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -63,10 +66,39 @@ const App: React.FC = () => {
     const audioPlaybackSources = useRef<Set<AudioBufferSourceNode>>(new Set());
     const uiAudioContextRef = useRef<AudioContext | null>(null);
     const aiRef = useRef<GoogleGenAI | null>(null);
+    const wakeLockSentinelRef = useRef<WakeLockSentinel | null>(null);
+    const radioAudioRef = useRef<HTMLAudioElement | null>(null);
+    // Fix: Replaced NodeJS.Timeout with ReturnType<typeof setTimeout> for browser compatibility.
+    const radioVolumeRestoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
     // Refs to avoid stale closures in the onmessage callback
     const currentInputRef = useRef('');
     const currentOutputRef = useRef('');
+
+
+    // --- Wake Lock Management ---
+    const requestWakeLock = useCallback(async () => {
+      if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+        try {
+          wakeLockSentinelRef.current = await navigator.wakeLock.request('screen');
+          wakeLockSentinelRef.current.addEventListener('release', () => {
+            // The lock was released by the system, we'll re-acquire it on visibility change
+            console.log('Wake Lock was released by the system.');
+          });
+          console.log('Screen Wake Lock is active.');
+        } catch (err: any) {
+          console.error(`Failed to acquire Wake Lock: ${err.name}, ${err.message}`);
+        }
+      }
+    }, []);
+  
+    const releaseWakeLock = useCallback(async () => {
+      if (wakeLockSentinelRef.current) {
+        await wakeLockSentinelRef.current.release();
+        wakeLockSentinelRef.current = null;
+        console.log('Screen Wake Lock released.');
+      }
+    }, []);
 
 
     // Initialize UI audio context on first user interaction
@@ -75,9 +107,21 @@ const App: React.FC = () => {
             uiAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
     }
+
+    const toggleRadio = useCallback(() => {
+        const radio = radioAudioRef.current;
+        if (radio) {
+            if (radio.paused) {
+                radio.play().catch(e => console.error("Radio play failed:", e));
+            } else {
+                radio.pause();
+            }
+        }
+    }, []);
     
     // Cleanup function to stop all processes
     const cleanup = useCallback(() => {
+        releaseWakeLock();
         // Stop microphone stream
         if (mediaStreamRef.current) {
             mediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -105,7 +149,7 @@ const App: React.FC = () => {
         audioPlaybackSources.current.forEach(source => source.stop());
         audioPlaybackSources.current.clear();
         nextAudioStartTimeRef.current = 0;
-    }, []);
+    }, [releaseWakeLock]);
 
     const handleStop = useCallback(async () => {
         initUiAudio();
@@ -150,6 +194,7 @@ const App: React.FC = () => {
                     onopen: async () => {
                         console.log('Session opened.');
                         setStatus('active');
+                        requestWakeLock(); // Acquire wake lock
                         // Start streaming microphone audio
                         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
                         mediaStreamSourceRef.current = inputAudioContextRef.current!.createMediaStreamSource(mediaStreamRef.current);
@@ -264,6 +309,12 @@ const App: React.FC = () => {
         // Handle audio output
         const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
         if (audioData && outputAudioContextRef.current) {
+            // Duck radio volume when AI starts speaking (first chunk of a turn)
+            if (audioPlaybackSources.current.size === 0 && radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioAudioRef.current.volume = 0.2;
+            }
+
             if (audioPlaybackSources.current.size === 0) { // Play sound only for the first chunk of a response
                 playResponseSound(uiAudioContextRef.current);
             }
@@ -289,6 +340,11 @@ const App: React.FC = () => {
             audioPlaybackSources.current.forEach(source => source.stop());
             audioPlaybackSources.current.clear();
             nextAudioStartTimeRef.current = 0;
+            // Restore radio volume on interruption
+            if (radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioAudioRef.current.volume = 1.0;
+            }
         }
 
         // Handle transcriptions using refs to avoid stale state
@@ -302,6 +358,16 @@ const App: React.FC = () => {
         }
 
         if (message.serverContent?.turnComplete) {
+            // Restore radio volume after the AI has finished its turn
+            if (radioAudioRef.current && !radioAudioRef.current.paused) {
+                if (radioVolumeRestoreTimerRef.current) clearTimeout(radioVolumeRestoreTimerRef.current);
+                radioVolumeRestoreTimerRef.current = setTimeout(() => {
+                    if (radioAudioRef.current) {
+                      radioAudioRef.current.volume = 1.0;
+                    }
+                }, 500);
+            }
+
             const finalInput = currentInputRef.current;
             const finalOutput = currentOutputRef.current;
 
@@ -382,23 +448,61 @@ const App: React.FC = () => {
         };
     }, [cleanup]);
 
+    // Effect to handle wake lock on visibility changes
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+          if (status === 'active' && document.visibilityState === 'visible') {
+            requestWakeLock();
+          }
+        };
+    
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+      }, [status, requestWakeLock]);
+
+    // Effect to initialize the radio player
+    useEffect(() => {
+        radioAudioRef.current = new Audio(RADIO_STREAM_URL);
+        radioAudioRef.current.crossOrigin = "anonymous";
+        const radio = radioAudioRef.current;
+        
+        const handlePlay = () => setIsRadioPlaying(true);
+        const handlePause = () => setIsRadioPlaying(false);
+        
+        radio.addEventListener('play', handlePlay);
+        radio.addEventListener('pause', handlePause);
+
+        return () => {
+            radio.removeEventListener('play', handlePlay);
+            radio.removeEventListener('pause', handlePause);
+            radio.pause();
+        }
+    }, []);
+
+
     return (
         <div className="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
             <div className="w-full max-w-4xl mx-auto flex flex-col h-[90vh] bg-white dark:bg-gray-800 shadow-2xl rounded-2xl overflow-hidden">
                 <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
                     <h1 className="text-lg md:text-xl font-bold">Bloop</h1>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2 md:space-x-4">
+                        <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
                         <StatusIndicator status={status} />
                         <ThemeToggle />
                     </div>
                 </header>
 
-                <main className="flex-1 flex flex-col md:flex-row overflow-hidden p-2 md:p-4 gap-4">
+                <main className="flex-1 flex flex-col-reverse md:flex-row overflow-hidden p-2 md:p-4 gap-4">
+                    <div className="flex-1 flex flex-col overflow-hidden md:flex-1 md:h-full">
+                        <TranscriptDisplay transcripts={displayedTranscripts} />
+                    </div>
                     {/* Unified Canvas Container with collapsible logic */}
                     <div className={`
-                        w-full relative overflow-hidden transition-all duration-500 ease-in-out
+                        w-full flex-shrink-0 relative overflow-hidden transition-all duration-500 ease-in-out
                         md:flex-1 md:h-full md:aspect-auto
-                        md:!h-full md:!aspect-auto
+                        md:!h-full
                         ${isCanvasExpanded ? 'aspect-square' : 'h-20'}
                     `}>
                         {/* Drawing Canvas Wrapper */}
@@ -432,9 +536,6 @@ const App: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex-1 flex overflow-hidden md:flex-1 md:h-full">
-                        <TranscriptDisplay transcripts={displayedTranscripts} />
-                    </div>
                 </main>
 
                 <footer className="p-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center">
