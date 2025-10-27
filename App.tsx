@@ -75,6 +75,8 @@ const App: React.FC = () => {
     const [canRedo, setCanRedo] = useState(false);
     const [isKeySelected, setIsKeySelected] = useState(false);
     const [isDesktopLayout, setIsDesktopLayout] = useState(window.matchMedia('(min-width: 768px)').matches);
+    const [isLandscape, setIsLandscape] = useState(window.matchMedia('(orientation: landscape)').matches);
+
 
     // Refs
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -112,11 +114,21 @@ const App: React.FC = () => {
     }, []);
     
     useEffect(() => {
-        const mediaQuery = window.matchMedia('(min-width: 768px)');
-        const handler = () => setIsDesktopLayout(mediaQuery.matches);
-        mediaQuery.addEventListener('change', handler);
-        return () => mediaQuery.removeEventListener('change', handler);
+        const desktopQuery = window.matchMedia('(min-width: 768px)');
+        const orientationQuery = window.matchMedia('(orientation: landscape)');
+
+        const handleDesktopChange = () => setIsDesktopLayout(desktopQuery.matches);
+        const handleOrientationChange = () => setIsLandscape(orientationQuery.matches);
+
+        desktopQuery.addEventListener('change', handleDesktopChange);
+        orientationQuery.addEventListener('change', handleOrientationChange);
+
+        return () => {
+            desktopQuery.removeEventListener('change', handleDesktopChange);
+            orientationQuery.removeEventListener('change', handleOrientationChange);
+        };
     }, []);
+
 
     useEffect(() => {
         const savedDrawing = localStorage.getItem('bloop-bloop-saved-drawing');
@@ -269,9 +281,10 @@ const App: React.FC = () => {
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
             outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
             
-            const gridInstruction = isDesktopLayout
-                ? "You are in desktop mode. The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
-                : "You are in tablet/mobile mode. The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
+            const isWideCanvas = isDesktopLayout || (!isDesktopLayout && isLandscape);
+            const gridInstruction = isWideCanvas
+                ? "You are in a wide layout (like a landscape monitor or tablet). The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
+                : "You are in a tall layout (like a portrait tablet or phone). The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
 
 
             sessionPromiseRef.current = aiRef.current.live.connect({
@@ -417,7 +430,8 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                             },
                         };
                         
-                        const gridContext = isDesktopLayout
+                        const isWideCanvas = isDesktopLayout || (!isDesktopLayout && isLandscape);
+                        const gridContext = isWideCanvas
                             ? "The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
                             : "The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
 
@@ -630,39 +644,42 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                     </div>
                 </header>
 
-                <main className="flex-1 bg-red-700 rounded-lg my-4 p-2 flex flex-col">
-                    <div className={`flex-1 flex flex-col bg-slate-300 dark:bg-slate-400 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
-                         <div className="p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
-                            <Ticker text={aiMessage} />
-                         </div>
-                         <div className="h-1 w-full bg-gray-900/10">
-                            {isAiDrawing && (
-                                <div className="h-full w-full animate-progress-shimmer"></div>
-                            )}
-                         </div>
-                         <div className="flex-1 w-full h-full relative">
-                            <DrawingCanvas
-                                ref={drawingCanvasRef}
-                                shake={isShaking}
-                                aiImageToLoad={aiImageToLoad}
-                                onAiDrawingComplete={handleAiDrawingComplete}
-                                initialDrawingUrl={initialDrawingUrl}
-                                onHistoryUpdate={handleHistoryUpdate}
-                            />
-                         </div>
-                    </div>
-                </main>
+                <div className={`flex-1 flex min-h-0 ${!isDesktopLayout && isLandscape ? 'flex-row items-stretch my-4 gap-4' : 'flex-col'}`}>
+                    <main className={`bg-red-700 rounded-lg p-2 flex flex-col ${!isDesktopLayout && isLandscape ? 'flex-1' : 'flex-1 my-4 w-full'}`}>
+                        <div className={`flex-1 flex flex-col bg-slate-300 dark:bg-slate-400 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
+                             <div className="p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
+                                <Ticker text={aiMessage} />
+                             </div>
+                             <div className="h-1 w-full bg-gray-900/10">
+                                {isAiDrawing && (
+                                    <div className="h-full w-full animate-progress-shimmer"></div>
+                                )}
+                             </div>
+                             <div className="flex-1 w-full h-full relative">
+                                <DrawingCanvas
+                                    ref={drawingCanvasRef}
+                                    shake={isShaking}
+                                    aiImageToLoad={aiImageToLoad}
+                                    onAiDrawingComplete={handleAiDrawingComplete}
+                                    initialDrawingUrl={initialDrawingUrl}
+                                    onHistoryUpdate={handleHistoryUpdate}
+                                />
+                             </div>
+                        </div>
+                    </main>
 
-                <footer className="h-24 flex-shrink-0 flex items-center justify-between px-4 md:px-8">
-                    <ControlButton 
-                        status={status}
-                        isKeySelected={isKeySelected}
-                        onStart={handleStart} 
-                        onStop={handleStop}
-                        onSelectKey={handleSelectKey}
-                    />
-                    <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
-                </footer>
+                    <footer className={`flex-shrink-0 flex ${!isDesktopLayout && isLandscape ? 'flex-col justify-around items-center w-24' : 'flex-row w-full justify-between items-center h-24 px-4 md:px-8'}`}>
+                        <ControlButton 
+                            status={status}
+                            isKeySelected={isKeySelected}
+                            onStart={handleStart} 
+                            onStop={handleStop}
+                            onSelectKey={handleSelectKey}
+                        />
+                        <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
+                    </footer>
+                </div>
+
             </div>
         </div>
     );

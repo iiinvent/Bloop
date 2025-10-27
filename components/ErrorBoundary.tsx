@@ -9,23 +9,23 @@ interface State {
 }
 
 class ErrorBoundary extends React.Component<Props, State> {
-  public state: State = {
+  state: State = {
     hasError: false,
   };
 
-  public static getDerivedStateFromError(_: Error): State {
+  static getDerivedStateFromError(_: Error): State {
     return { hasError: true };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
   }
 
-  private handleReset = () => {
+  handleReset = () => {
     window.location.reload();
   };
 
-  public render() {
+  render() {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-4 font-sans bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200">
@@ -43,7 +43,6 @@ class ErrorBoundary extends React.Component<Props, State> {
       );
     }
 
-    // Fix: In a React class component, props are accessed via `this.props`. This returns the nested components (children).
     return this.props.children;
   }
 }
