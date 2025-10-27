@@ -26,12 +26,12 @@ const TranscriptDisplay: React.FC<TranscriptDisplayProps> = ({ transcripts }) =>
         transcripts.map((item) => (
           <div key={item.id} className={`flex items-start gap-4 ${item.speaker === 'user' ? 'justify-end' : ''}`}>
             {item.speaker === 'ai' && (
-              <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">AI</div>
+              <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">AI</div>
             )}
             <div className={`max-w-xs md:max-w-md lg:max-w-lg p-3 rounded-lg flex items-center ${
                 item.speaker === 'user'
                   ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
-                  : 'bg-blue-100 dark:bg-blue-900 text-gray-900 dark:text-gray-100'
+                  : 'bg-orange-100 dark:bg-orange-900 text-orange-900 dark:text-orange-100'
               }`}>
                 {item.text && <p className="text-sm break-words">{item.text}</p>}
                 {item.isLoading && <LoadingSpinner />}

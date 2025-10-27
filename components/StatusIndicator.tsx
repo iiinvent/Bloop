@@ -11,9 +11,9 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
       case 'idle':
         return { text: 'Ready', color: 'bg-gray-400' };
       case 'connecting':
-        return { text: 'Connecting...', color: 'bg-yellow-500 animate-pulse' };
+        return { text: 'Connecting...', color: 'bg-orange-500 animate-pulse' };
       case 'active':
-        return { text: 'Listening', color: 'bg-green-500 animate-pulse' };
+        return { text: 'Listening', color: 'bg-orange-600 animate-pulse' };
       case 'error':
         return { text: 'Error', color: 'bg-red-500' };
       default:

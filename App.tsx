@@ -30,6 +30,20 @@ const drawSomethingFunctionDeclaration: FunctionDeclaration = {
     },
 };
 
+// Keywords to detect if a specific drawing style was requested
+const styleKeywords = [
+    'photorealistic', 'realistic', 'photo', 'watercolor', 'oil painting',
+    'cartoon', 'impressionist', 'cubist', 'abstract', '3d render', 'pixel art',
+    'sketch', 'charcoal', 'pastel', 'line art', 'drawing', 'illustration',
+    'vector', 'anime', 'manga', 'gothic', 'renaissance', 'pop art', 'art nouveau'
+];
+
+const containsStyleKeyword = (text: string): boolean => {
+    const lowerText = text.toLowerCase();
+    return styleKeywords.some(keyword => lowerText.includes(keyword));
+};
+
+
 const App: React.FC = () => {
     const [status, setStatus] = useState<Status>('idle');
     const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -172,7 +186,7 @@ const App: React.FC = () => {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
-                    systemInstruction: "You are a fun, friendly, and creative assistant. You can talk about drawings too. To illustrate something, you have a tool called 'drawSomething' you can use.",
+                    systemInstruction: "You are a fun, friendly, and creative assistant. You can talk about drawings too. To illustrate something, you have a tool called 'drawSomething' you can use. By default, your drawings will be simple line art. If the user asks for a specific style (like 'photorealistic', 'watercolor', or 'cartoon'), include that in your description for the drawing tool.",
                     tools: [{ functionDeclarations: [drawSomethingFunctionDeclaration] }],
                 },
             });
@@ -191,14 +205,19 @@ const App: React.FC = () => {
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === 'drawSomething') {
-                    const description = fc.args.description ?? 'something creative';
+                    const originalDescription = fc.args.description ?? 'something creative';
                     const drawingId = `drawing-${Date.now()}`;
                     
+                    let imagePrompt = originalDescription;
+                    if (!containsStyleKeyword(originalDescription)) {
+                        imagePrompt = `line art drawing of ${originalDescription}`;
+                    }
+
                     // Add a placeholder message
                     setTranscripts(prev => [...prev, {
                         id: drawingId,
                         speaker: 'ai',
-                        text: `Drawing: "${description}"`,
+                        text: `Drawing: "${originalDescription}"`,
                         isLoading: true,
                     }]);
 
@@ -206,7 +225,7 @@ const App: React.FC = () => {
                         // Generate the image
                         const response = await aiRef.current!.models.generateContent({
                             model: 'gemini-2.5-flash-image',
-                            contents: { parts: [{ text: description }] },
+                            contents: { parts: [{ text: imagePrompt }] },
                             config: { responseModalities: [Modality.IMAGE] },
                         });
 
@@ -363,18 +382,18 @@ const App: React.FC = () => {
         <div className="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
             <div className="w-full max-w-4xl mx-auto flex flex-col h-[90vh] bg-white dark:bg-gray-800 shadow-2xl rounded-2xl overflow-hidden">
                 <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-                    <h1 className="text-lg md:text-xl font-bold">AI Voice Agent</h1>
+                    <h1 className="text-lg md:text-xl font-bold">Bloop</h1>
                     <div className="flex items-center space-x-4">
                         <StatusIndicator status={status} />
                         <ThemeToggle />
                     </div>
                 </header>
 
-                <main className="flex-1 flex flex-col-reverse md:flex-row overflow-hidden p-2 md:p-4 gap-4">
-                     <div className="flex-1 flex h-3/5 md:h-full">
-                         <DrawingCanvas onSend={handleSendDrawing} disabled={status !== 'active'} clearKey={clearCanvasKey} />
+                <main className="flex-1 flex flex-col md:flex-row overflow-hidden p-2 md:p-4 gap-4">
+                    <div className="w-full aspect-square md:flex-1 md:h-full md:aspect-auto">
+                        <DrawingCanvas onSend={handleSendDrawing} disabled={status !== 'active'} clearKey={clearCanvasKey} />
                     </div>
-                    <div className="flex-1 flex h-2/5 md:h-full">
+                    <div className="flex-1 flex overflow-hidden md:flex-1 md:h-full">
                         <TranscriptDisplay transcripts={displayedTranscripts} />
                     </div>
                 </main>

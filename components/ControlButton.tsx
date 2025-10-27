@@ -50,7 +50,7 @@ const ControlButton: React.FC<ControlButtonProps> = ({ status, onStart, onStop }
   const baseClasses = 'w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-300 ease-in-out focus:outline-none focus:ring-4 shadow-lg';
   const colorClasses = isActive 
     ? 'bg-red-600 hover:bg-red-700 focus:ring-red-400' 
-    : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-400';
+    : 'bg-orange-600 hover:bg-orange-700 focus:ring-orange-400';
   const disabledClasses = isDisabled ? 'opacity-50 cursor-not-allowed' : '';
   
   return (

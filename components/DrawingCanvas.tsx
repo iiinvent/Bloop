@@ -228,8 +228,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
       </div>
       <div className="p-2 border-t border-gray-200 dark:border-gray-600 flex items-center justify-between flex-wrap gap-2">
          <div className="flex items-center gap-2">
-            <button onClick={() => setTool('pen')} disabled={disabled} className={`p-2 rounded-md ${tool === 'pen' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-600'} disabled:opacity-50`} title="Pen"><PenIcon /></button>
-            <button onClick={() => setTool('eraser')} disabled={disabled} className={`p-2 rounded-md ${tool === 'eraser' ? 'bg-blue-500 text-white' : 'bg-gray-200 dark:bg-gray-600'} disabled:opacity-50`} title="Eraser"><EraserIcon /></button>
+            <button onClick={() => setTool('pen')} disabled={disabled} className={`p-2 rounded-md ${tool === 'pen' ? 'bg-orange-500 text-white' : 'bg-gray-200 dark:bg-gray-600'} disabled:opacity-50`} title="Pen"><PenIcon /></button>
+            <button onClick={() => setTool('eraser')} disabled={disabled} className={`p-2 rounded-md ${tool === 'eraser' ? 'bg-orange-500 text-white' : 'bg-gray-200 dark:bg-gray-600'} disabled:opacity-50`} title="Eraser"><EraserIcon /></button>
             <button onClick={handleUndo} disabled={disabled || !canUndo} className="p-2 rounded-md bg-gray-200 dark:bg-gray-600 disabled:opacity-50" title="Undo"><UndoIcon /></button>
             <button onClick={handleRedo} disabled={disabled || !canRedo} className="p-2 rounded-md bg-gray-200 dark:bg-gray-600 disabled:opacity-50" title="Redo"><RedoIcon /></button>
             <input type="color" value={color} onChange={(e) => setColor(e.target.value)} disabled={disabled || tool === 'eraser'} className="w-8 h-8 p-0 border-none rounded-md bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" title="Color"/>
@@ -237,7 +237,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSend, disabled, clearKe
          </div>
          <div className="flex items-center gap-2">
             <button onClick={clearAndSaveInitialState} disabled={disabled} className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Clear</button>
-            <button onClick={handleSend} disabled={disabled} className="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50">Send</button>
+            <button onClick={handleSend} disabled={disabled} className="px-3 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50">Send</button>
          </div>
       </div>
     </div>

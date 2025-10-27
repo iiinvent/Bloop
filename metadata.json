@@ -1,6 +1,6 @@
 {
   "name": "Bloop",
-  "description": "A conversational AI agent that listens and responds to your voice in real-time using the Gemini Live API.",
+  "description": "Bloop is a conversational AI agent that listens, responds, and draws in real-time.",
   "requestFramePermissions": [
     "microphone"
   ]
