@@ -1,0 +1,7 @@
+{
+  "name": "Bloop",
+  "description": "A conversational AI agent that listens and responds to your voice in real-time using the Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
