@@ -604,6 +604,19 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
         return () => { radio.removeEventListener('play', handlePlay); radio.removeEventListener('pause', handlePause); radio.pause(); }
     }, []);
 
+    const controlButton = (
+        <ControlButton
+            status={status}
+            isKeySelected={isKeySelected}
+            onStart={handleStart}
+            onStop={handleStop}
+            onSelectKey={handleSelectKey}
+        />
+    );
+
+    const radioPlayer = <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />;
+
+
     return (
         <div className="h-screen w-screen p-4 font-sans box-border">
              <audio
@@ -616,7 +629,9 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                 <header className="flex items-center justify-between text-yellow-400">
                     <h1 className="text-2xl md:text-3xl font-pacifico tracking-wider">Bloop Bloop</h1>
                     <div className="flex items-center space-x-2">
-                        <StatusIndicator status={status} />
+                        {/* For default layout (desktop or portrait), show status first. */}
+                        {!(!isDesktopLayout && isLandscape) && <StatusIndicator status={status} />}
+
                         <button
                             onClick={handleUndo}
                             disabled={!canUndo}
@@ -640,14 +655,18 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                         >
                             <SaveIcon />
                         </button>
+                        
+                        {/* For mobile/tablet landscape, show status after action buttons. */}
+                        {(!isDesktopLayout && isLandscape) && <StatusIndicator status={status} />}
+
                         <ThemeToggle />
                     </div>
                 </header>
 
                 <div className={`flex-1 flex min-h-0 ${!isDesktopLayout && isLandscape ? 'flex-row items-stretch my-4 gap-4' : 'flex-col'}`}>
-                    <main className={`bg-red-700 rounded-lg p-2 flex flex-col ${!isDesktopLayout && isLandscape ? 'flex-1' : 'flex-1 my-4 w-full'}`}>
-                        <div className={`flex-1 flex flex-col bg-slate-300 dark:bg-slate-400 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
-                             <div className="p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
+                    <main className={`bg-red-700 rounded-lg p-2 flex flex-col flex-1 ${!isDesktopLayout && isLandscape ? 'min-w-0' : 'my-4 w-full'}`}>
+                        <div className={`flex-1 flex flex-col bg-slate-300 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
+                             <div className="bg-slate-200 p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
                                 <Ticker text={aiMessage} />
                              </div>
                              <div className="h-1 w-full bg-gray-900/10">
@@ -668,15 +687,18 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                         </div>
                     </main>
 
-                    <footer className={`flex-shrink-0 flex ${!isDesktopLayout && isLandscape ? 'flex-col justify-around items-center w-24' : 'flex-row w-full justify-between items-center h-24 px-4 md:px-8'}`}>
-                        <ControlButton 
-                            status={status}
-                            isKeySelected={isKeySelected}
-                            onStart={handleStart} 
-                            onStop={handleStop}
-                            onSelectKey={handleSelectKey}
-                        />
-                        <RadioPlayer isPlaying={isRadioPlaying} onToggle={toggleRadio} />
+                    <footer className={`flex-shrink-0 flex ${!isDesktopLayout && isLandscape ? 'flex-col justify-between items-center w-24 py-2' : 'flex-row w-full justify-between items-center h-24 px-4 md:px-8'}`}>
+                        {(!isDesktopLayout && isLandscape) ? (
+                            <>
+                                {radioPlayer}
+                                {controlButton}
+                            </>
+                        ) : (
+                             <>
+                                {controlButton}
+                                {radioPlayer}
+                            </>
+                        )}
                     </footer>
                 </div>
 

@@ -126,11 +126,16 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         if (resizeTimeoutRef.current) {
             clearTimeout(resizeTimeoutRef.current);
         }
+        
+        canvas.classList.add('opacity-0');
 
         resizeTimeoutRef.current = setTimeout(() => {
             const { width, height } = parent.getBoundingClientRect();
             
-            if (canvas.width === width && canvas.height === height) return;
+            if (canvas.width === width && canvas.height === height) {
+                canvas.classList.remove('opacity-0');
+                return;
+            };
             
             const lastStateUrl = historyRef.current[historyIndexRef.current];
 
@@ -142,11 +147,17 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
                 image.src = lastStateUrl;
                 image.onload = () => {
                     const ctx = getCanvasContext();
-                    // This redraws the saved image, scaling it to the new canvas size, which is the desired effect.
                     ctx?.drawImage(image, 0, 0, width, height);
+                    canvas.classList.remove('opacity-0');
                 };
+                image.onerror = () => {
+                    console.error("Failed to reload canvas state on resize.");
+                    canvas.classList.remove('opacity-0');
+                }
+            } else {
+                canvas.classList.remove('opacity-0');
             }
-        }, 250); // Debounce for 250ms
+        }, 100); // Debounce for 100ms
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
@@ -293,7 +304,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
     <div className="relative w-full h-full">
         <canvas 
             ref={canvasRef} 
-            className="absolute inset-0 w-full h-full touch-none cursor-crosshair" 
+            className="absolute inset-0 w-full h-full touch-none cursor-crosshair transition-opacity duration-200" 
         />
     </div>
   );
