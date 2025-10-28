@@ -98,8 +98,44 @@ const App: React.FC = () => {
     const drawingAudioRef = useRef<HTMLAudioElement | null>(null);
     const isAiDrawingRef = useRef(false);
     const pendingDrawStartRef = useRef(false);
+    const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingToolCallInfoRef = useRef<{ id: string; name: string } | null>(null);
 
     // --- Core App Logic (Wake Lock, Audio Init, etc.) ---
+
+    // Clears the watchdog timer and pending tool call info
+    const clearWatchdog = useCallback(() => {
+        if (watchdogTimerRef.current) {
+            clearTimeout(watchdogTimerRef.current);
+            watchdogTimerRef.current = null;
+        }
+        pendingToolCallInfoRef.current = null;
+    }, []);
+
+    // Watchdog handler for stalled drawing processes
+    const handleDrawingStall = useCallback(() => {
+        console.error("Watchdog triggered: Drawing process stalled. Recovering.");
+        
+        setIsAiDrawing(false);
+        setAiImageToLoad(null);
+        pendingDrawStartRef.current = false;
+        
+        setAiMessage("My virtual pencil got stuck! Let's try another drawing idea.");
+        
+        // Inform the AI that the tool call failed so it can continue the conversation
+        if (pendingToolCallInfoRef.current) {
+            sessionPromiseRef.current?.then(session => {
+                session?.sendToolResponse({
+                    functionResponses: {
+                        id: pendingToolCallInfoRef.current!.id,
+                        name: pendingToolCallInfoRef.current!.name,
+                        response: { result: "error: process stalled and was reset" },
+                    },
+                });
+            });
+        }
+        clearWatchdog();
+    }, [clearWatchdog]);
 
     useEffect(() => {
         const checkApiKey = async () => {
@@ -203,6 +239,7 @@ const App: React.FC = () => {
     
     const cleanup = useCallback(() => {
         releaseWakeLock();
+        clearWatchdog(); // Ensure watchdog is cleared on session cleanup
         if (mediaStreamRef.current) {
             mediaStreamRef.current.getTracks().forEach(track => track.stop());
             mediaStreamRef.current = null;
@@ -222,7 +259,7 @@ const App: React.FC = () => {
             radioAudioRef.current?.play().catch(e => console.error("Radio resume failed:", e));
             radioWasPlayingOnStartRef.current = false;
         }
-    }, [releaseWakeLock]);
+    }, [releaseWakeLock, clearWatchdog]);
 
     const handleStop = useCallback(async () => {
         initUiAudio();
@@ -414,6 +451,11 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                 let toolResponseResult = "done"; // Default to done, will be changed on failure.
                 
                 if (fc.name === 'editDrawing') {
+                    // Start watchdog for the entire drawing process
+                    clearWatchdog();
+                    pendingToolCallInfoRef.current = { id: fc.id, name: fc.name };
+                    watchdogTimerRef.current = setTimeout(() => handleDrawingStall(), 30000); // 30-second watchdog
+
                     setAiMessage(`Drawing: ${fc.args.description}...`);
                     
                     pendingDrawStartRef.current = true;
@@ -489,6 +531,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                                 pendingDrawStartRef.current = false;
                                 setAiImageToLoad(null);
                                 toolResponseResult = "error: could not draw";
+                                clearWatchdog(); // Clear watchdog on final failure
                             }
                         }
                     }
@@ -585,9 +628,10 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
     };
     
     const handleAiDrawingComplete = useCallback(() => {
+        clearWatchdog(); // Drawing is complete, clear the watchdog
         setAiImageToLoad(null);
         setIsAiDrawing(false);
-    }, []);
+    }, [clearWatchdog]);
 
     const handleSaveDrawing = () => {
         const imageDataUrl = drawingCanvasRef.current?.getImageDataUrl();
