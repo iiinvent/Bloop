@@ -143,12 +143,19 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
 
             canvas.width = width;
             canvas.height = height;
+            
+            const ctx = getCanvasContext();
+
+            // Always fill the background after a resize to prevent transparency issues.
+            if (ctx) {
+                ctx.fillStyle = BG_COLOR;
+                ctx.fillRect(0, 0, width, height);
+            }
 
             if (lastStateUrl) {
                 const image = new Image();
                 image.src = lastStateUrl;
                 image.onload = () => {
-                    const ctx = getCanvasContext();
                     ctx?.drawImage(image, 0, 0, width, height);
                     canvas.classList.remove('opacity-0');
                 };
@@ -178,8 +185,12 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
             image.src = initialDrawingUrl;
             image.onload = () => {
                 const ctx = getCanvasContext();
-                ctx?.drawImage(image, 0, 0, canvas.width, canvas.height);
-                saveState(); // Save initial drawing
+                if (ctx) {
+                    ctx.fillStyle = BG_COLOR;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+                    saveState(); // Save initial drawing
+                }
             };
         } else {
             clearCanvas();
