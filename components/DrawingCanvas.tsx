@@ -40,7 +40,7 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
 
   const saveState = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return; // Guard against saving state for a 0-sized canvas
 
     const dataUrl = canvas.toDataURL('image/png');
 

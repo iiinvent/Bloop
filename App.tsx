@@ -371,11 +371,11 @@ const App: React.FC = () => {
                     outputAudioTranscription: {},
                     systemInstruction: `You are Bloop Bloop, a fun AI assistant inside an Etch A Sketch. Your primary goal is to be a fun, collaborative drawing partner for a child.
 
-**LISTENING RULES:**
-*   **Focus on Drawing:** Your main job is to listen for instructions about what to draw. Pay close attention to words like "draw," "add," "put," "make," "remove," and "clear."
-*   **Ignore Background Noise:** You must ignore sounds that are not direct commands for you. This includes background chatter, indistinct murmurs, coughs, or other noises. Do not respond to them.
-*   **Handle Unclear Speech:** If you hear something but are not sure it's a drawing command, do not guess. Remain silent and wait for a clearer instruction. If the user seems to be talking to you but you can't understand, you can say, "Sorry, I didn't quite catch that. What should we draw next?"
-*   **Stay On Topic:** Your entire conversation is about the drawing. If someone asks a question not related to drawing, gently guide them back to the activity. For example: "That's a fun thought! Right now, I'm ready to draw. What should we add to our picture?"
+**CRITICAL LISTENING RULES:**
+*   **DRAWING COMMANDS ONLY:** Your SOLE purpose is to listen for instructions about what to draw. Focus on keywords like "draw," "add," "put," "make," "remove," and "clear."
+*   **IGNORE EVERYTHING ELSE:** You MUST aggressively ignore any sounds that are not direct drawing commands. This includes background chatter between people, indistinct murmurs, coughs, TV noise, or other ambient sounds. Do NOT acknowledge or respond to them in any way. Remain silent.
+*   **IF UNSURE, ASK:** If you hear speech but cannot clearly understand if it is a drawing command, DO NOT GUESS. You must ask for clarification by saying, "Sorry, I didn't quite catch that. What should we draw?" and then wait silently.
+*   **STAY ON TOPIC:** Your entire conversation is about the drawing. If someone asks a question not related to drawing (e.g., "what's the weather?"), gently guide them back to the activity by saying something like, "That's a fun question! But I'm ready to draw. What should we add to our picture?"
 
 **GRID RULES:**
 *   ${gridInstruction}
@@ -411,12 +411,12 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
     const handleServerMessage = async (message: LiveServerMessage) => {
         if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
-                let toolResponseResult = "done";
+                let toolResponseResult = "done"; // Default to done, will be changed on failure.
+                
                 if (fc.name === 'editDrawing') {
                     setAiMessage(`Drawing: ${fc.args.description}...`);
                     
                     pendingDrawStartRef.current = true;
-                    // If the AI has already finished speaking, start the drawing sequence.
                     if (audioPlaybackSources.current.size === 0) {
                         setTimeout(() => {
                             if (audioPlaybackSources.current.size === 0 && pendingDrawStartRef.current) {
@@ -426,54 +426,71 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                         }, 100);
                     }
                     
-                    try {
-                        if (!turnCanvasSnapshotRef.current) {
-                          throw new Error("Missing canvas snapshot for this turn.");
+                    let success = false;
+                    let attempts = 0;
+                    const maxAttempts = 2; // Initial attempt + 1 retry
+
+                    while (!success && attempts < maxAttempts) {
+                        attempts++;
+                        try {
+                            if (attempts > 1) {
+                                setAiMessage("That didn't quite work, let me try again...");
+                            }
+
+                            if (!turnCanvasSnapshotRef.current) {
+                              throw new Error("Missing canvas snapshot for this turn.");
+                            }
+            
+                            const imagePart = {
+                                inlineData: {
+                                    mimeType: 'image/png',
+                                    data: turnCanvasSnapshotRef.current.split(',')[1],
+                                },
+                            };
+                            
+                            const isWideCanvas = isDesktopLayout || (!isDesktopLayout && isLandscape);
+                            const gridContext = isWideCanvas
+                                ? "The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
+                                : "The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
+    
+                            const textPart = {
+                               text: `You are an expert Etch A Sketch artist. You will be given an image of the current drawing and a description of how to change it. Your task is to return a completely new image that incorporates the requested change, redrawing the entire scene in the Etch A Sketch style.
+    
+    **GRID CONTEXT:** ${gridContext} Use this grid to plan the layout of the new image. When adding a new item, place it in an empty area of the grid. Aim for a balanced, natural composition. The new item should initially occupy a small part of the grid (e.g., 1x1 or 1x2 cells).
+    
+    **USER REQUEST:** '${fc.args.description}'
+    
+    **CRITICAL RULES FOR YOUR OUTPUT IMAGE:**
+    1.  **PRESERVE EXISTING ART:** You must perfectly preserve the scale, position, and line style of all art from the original image. Do not change, move, or resize any part of the drawing that was not requested in the user's prompt.
+    2.  **COMPLETE IMAGE:** Your output MUST be the full, complete drawing with the change applied. It should contain the original art (preserved perfectly) plus only the new art.
+    3.  **TRANSPARENT BACKGROUND:** This is the most important rule. The background of your output image MUST be fully transparent. The drawing will be placed on a special gray, textured surface, so any non-transparent background in your image (like white or gray) will cover up the texture and ruin the effect.
+    4.  **LINE ART STYLE:** All art, new and old, MUST be simple line art using a single, slightly bold, dark gray (#404040) line. It must look like it was drawn with a single continuous line on a real Etch A Sketch. Do not use filled shapes or shading.`
+                            };
+                            
+                            const response = await aiRef.current!.models.generateContent({
+                                model: 'gemini-2.5-flash-image',
+                                contents: { parts: [imagePart, textPart] },
+                                config: { responseModalities: [Modality.IMAGE] },
+                            });
+    
+                            const part = response.candidates?.[0]?.content?.parts?.[0];
+                            if (part?.inlineData) {
+                                setAiImageToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                                success = true;
+                                toolResponseResult = "done";
+                            } else {
+                                throw new Error("No image data received from API.");
+                            }
+                        } catch (error) {
+                            console.error(`Image generation failed on attempt ${attempts}:`, error);
+                            if (attempts >= maxAttempts) {
+                                setAiMessage("Oh dear, I couldn't quite draw that. Let's try something else!");
+                                setIsAiDrawing(false);
+                                pendingDrawStartRef.current = false;
+                                setAiImageToLoad(null);
+                                toolResponseResult = "error: could not draw";
+                            }
                         }
-        
-                        const imagePart = {
-                            inlineData: {
-                                mimeType: 'image/png',
-                                data: turnCanvasSnapshotRef.current.split(',')[1],
-                            },
-                        };
-                        
-                        const isWideCanvas = isDesktopLayout || (!isDesktopLayout && isLandscape);
-                        const gridContext = isWideCanvas
-                            ? "The canvas has a virtual 4x3 grid (4 columns, 3 rows)."
-                            : "The canvas has a virtual 3x4 grid (3 columns, 4 rows).";
-
-                        const textPart = {
-                           text: `You are an expert Etch A Sketch artist. You will be given an image of the current drawing and a description of how to change it. Your task is to return a completely new image that incorporates the requested change, redrawing the entire scene in the Etch A Sketch style.
-
-**GRID CONTEXT:** ${gridContext} Use this grid to plan the layout of the new image. When adding a new item, place it in an empty area of the grid. Aim for a balanced, natural composition. The new item should initially occupy a small part of the grid (e.g., 1x1 or 1x2 cells).
-
-**USER REQUEST:** '${fc.args.description}'
-
-**CRITICAL RULES FOR YOUR OUTPUT IMAGE:**
-1.  **PRESERVE EXISTING ART:** You must perfectly preserve the scale, position, and line style of all art from the original image. Do not change, move, or resize any part of the drawing that was not requested in the user's prompt.
-2.  **COMPLETE IMAGE:** Your output MUST be the full, complete drawing with the change applied. It should contain the original art (preserved perfectly) plus only the new art.
-3.  **TRANSPARENT BACKGROUND:** This is the most important rule. The background of your output image MUST be fully transparent. The drawing will be placed on a special gray, textured surface, so any non-transparent background in your image (like white or gray) will cover up the texture and ruin the effect.
-4.  **LINE ART STYLE:** All art, new and old, MUST be simple line art using a single, slightly bold, dark gray (#404040) line. It must look like it was drawn with a single continuous line on a real Etch A Sketch. Do not use filled shapes or shading.`
-                        };
-                        
-                        const response = await aiRef.current!.models.generateContent({
-                            model: 'gemini-2.5-flash-image',
-                            contents: { parts: [imagePart, textPart] },
-                            config: { responseModalities: [Modality.IMAGE] },
-                        });
-
-                        const part = response.candidates?.[0]?.content?.parts?.[0];
-                        if (part?.inlineData) {
-                            setAiImageToLoad(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                        } else {
-                            throw new Error("No image data received.");
-                        }
-                    } catch (error) {
-                        console.error("Image generation failed:", error);
-                        setAiMessage("Sorry, I couldn't edit the drawing.");
-                        setIsAiDrawing(false);
-                        toolResponseResult = "error";
                     }
 
                 } else if (fc.name === 'clearCanvas') {
@@ -485,6 +502,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
                             resolve();
                         }, 500);
                     });
+                    toolResponseResult = "done";
                 }
                 
                 try {
