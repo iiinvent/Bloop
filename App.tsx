@@ -71,7 +71,7 @@ const App: React.FC = () => {
     const [initialDrawingUrl, setInitialDrawingUrl] = useState<string | null>(null);
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
-    const [isKeySelected, setIsKeySelected] = useState(false);
+    const [isKeySelected, setIsKeySelected] = useState(!!process.env.API_KEY);
     const [isDesktopLayout, setIsDesktopLayout] = useState(window.matchMedia('(min-width: 768px)').matches);
     const [isLandscape, setIsLandscape] = useState(window.matchMedia('(orientation: landscape)').matches);
 
@@ -103,9 +103,13 @@ const App: React.FC = () => {
 
     useEffect(() => {
         const checkApiKey = async () => {
-            // @ts-ignore
-            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
-                setIsKeySelected(true);
+            // This check is for the case where API_KEY env var is not set,
+            // but a key has been selected through the aistudio flow.
+            if (!process.env.API_KEY) {
+                // @ts-ignore
+                if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
+                    setIsKeySelected(true);
+                }
             }
         };
         checkApiKey();
