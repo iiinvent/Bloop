@@ -620,7 +620,7 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
 
 
     return (
-        <div className="h-screen w-screen p-4 font-sans box-border flex items-center justify-center">
+        <div className="h-full w-full safe-area-padding font-sans box-border flex items-center justify-center">
              <audio
                 ref={drawingAudioRef}
                 src={DRAWING_LOOP_URL}
@@ -669,8 +669,8 @@ Keep all your comments very short (just a few words), cheerful, and encouraging.
 
                 <div className={`flex-1 flex min-h-0 ${!isDesktopLayout && isLandscape ? 'flex-row items-stretch my-4 gap-4' : 'flex-col'}`}>
                     <main className={`bg-red-700 rounded-lg p-2 flex flex-col flex-1 ${!isDesktopLayout && isLandscape ? 'min-w-0' : 'my-4 w-full'}`}>
-                        <div className={`flex-1 flex flex-col bg-slate-300 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
-                             <div className="bg-slate-200 p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
+                        <div className={`flex-1 flex flex-col bg-gray-300 rounded-md overflow-hidden border-2 border-yellow-500 screen-texture`}>
+                             <div className="bg-gray-200 p-2 text-gray-800 dark:text-gray-900 font-mono h-12 flex items-center overflow-hidden">
                                 <Ticker text={aiMessage} />
                              </div>
                              <div className="h-1 w-full bg-gray-900/10">

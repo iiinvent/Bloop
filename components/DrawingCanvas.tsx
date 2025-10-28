@@ -17,6 +17,7 @@ export interface DrawingCanvasRef {
     redo: () => void;
 }
 
+const BG_COLOR = '#d1d5db'; // Corresponds to Tailwind's gray-300
 const DRAW_COLOR = '#404040';
 const BRUSH_SIZE = 4;
 
@@ -100,7 +101,8 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
         }
     }
     
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = BG_COLOR;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     historyRef.current = [];
     historyIndexRef.current = -1;
     saveState(); // Save the initial blank state
@@ -204,8 +206,9 @@ const DrawingCanvas: React.ForwardRefRenderFunction<DrawingCanvasRef, DrawingCan
       aiImage.src = aiImageToLoad;
       
       aiImage.onload = () => {
-        // The AI provides the full new image, so we just clear and draw.
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // The AI provides the full new image, so we fill the background then draw.
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(aiImage, 0, 0, canvas.width, canvas.height);
         
         // Save the new state and notify completion.
